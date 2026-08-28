@@ -58,6 +58,7 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -404,6 +405,8 @@ static int write_seed(const char* dir, const char* name, const capture_t* c)
 
 int main(int argc, char** argv)
 {
+	(void)signal(SIGPIPE, SIG_IGN);
+
 	const char* outdir = argc > 1 ? argv[1] : ".";
 	int do_input = 1;
 	if (argc > 2)
@@ -423,7 +426,7 @@ int main(int argc, char** argv)
 		return 1;
 	int one = 1;
 	setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-	struct sockaddr_in sa = { 0 };
+	struct sockaddr_in sa = WINPR_C_ARRAY_INIT;
 	sa.sin_family = AF_INET;
 	sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	sa.sin_port = 0;
@@ -444,7 +447,7 @@ int main(int argc, char** argv)
 		return 1;
 	printf("client connected\n");
 
-	int sv[2];
+	int sv[2] = WINPR_C_ARRAY_INIT;
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0)
 		return 1;
 
@@ -468,11 +471,15 @@ int main(int argc, char** argv)
 	Sleep(200);
 	close(cfd);
 	close(sv[1]);
+
+	/* wait for the relay threads to finish before touching the capture */
+	pthread_join(t1, nullptr);
+	pthread_join(t2, nullptr);
+
 	WaitForSingleObject(hpeer, 10000);
 
 	CloseHandle(hclient);
 	CloseHandle(hpeer);
-	close(sv[0]);
 	close(lfd);
 
 	printf("captured %zu bytes\n", capture.len);

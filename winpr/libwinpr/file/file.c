@@ -40,6 +40,7 @@
 #include <winpr/string.h>
 
 #include "file.h"
+#include "../handle/handle.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/file.h>
@@ -101,7 +102,7 @@ static BOOL FileCloseHandleInt(HANDLE handle, BOOL force)
 	}
 
 	free(file->lpFileName);
-	free(file);
+	file->lpFileName = nullptr;
 	return TRUE;
 }
 
@@ -960,6 +961,20 @@ static HANDLE FileCreateFileA(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dw
 		return INVALID_HANDLE_VALUE;
 	}
 
+	{
+		/* winpr_fopen()/freopen() give no way to request O_CLOEXEC atomically; match Windows
+		 * semantics (not inherited unless asked) by default here too. */
+		const BOOL inherit =
+		    pFile->lpSecurityAttributes && pFile->lpSecurityAttributes->bInheritHandle;
+		if (!winpr_set_cloexec(fileno(fp), !inherit))
+		{
+			SetLastError(map_posix_err(errno));
+			FileCloseHandle(pFile);
+			free(pFile);
+			return INVALID_HANDLE_VALUE;
+		}
+	}
+
 	(void)setvbuf(fp, nullptr, _IONBF, 0);
 
 #ifdef __sun
@@ -994,6 +1009,7 @@ static HANDLE FileCreateFileA(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dw
 
 			SetLastError(map_posix_err(errno));
 			FileCloseHandle(pFile);
+			free(pFile);
 			return INVALID_HANDLE_VALUE;
 		}
 
@@ -1007,6 +1023,7 @@ static HANDLE FileCreateFileA(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dw
 		{
 			SetLastError(map_posix_err(errno));
 			FileCloseHandle(pFile);
+			free(pFile);
 			return INVALID_HANDLE_VALUE;
 		}
 	}
@@ -1050,6 +1067,7 @@ static WINPR_FILE* FileHandle_New(FILE* fp)
 void GetStdHandle_Uninit(void)
 {
 	FileCloseHandleInt(pStdHandleFile, TRUE);
+	free(pStdHandleFile);
 }
 
 HANDLE GetStdHandle(DWORD nStdHandle)

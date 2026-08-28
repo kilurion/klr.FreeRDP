@@ -576,9 +576,7 @@ static BOOL rdp_client_reconnect_channels(rdpRdp* rdp, BOOL redirect)
 
 		pointer_cache_register_callbacks(context->update);
 
-		WINPR_ASSERT(!context->cache);
-		context->cache = cache_new(context);
-		if (!context->cache)
+		if (!cache_resize(context))
 			return FALSE;
 
 		if (!IFCALLRESULT(FALSE, context->instance->PostConnect, context->instance))
@@ -1561,6 +1559,12 @@ BOOL rdp_server_accept_nego(rdpRdp* rdp, wStream* s)
 
 	if (!nego_send_negotiation_response(nego))
 		return FALSE;
+
+	if ((SelectedProtocol & PROTOCOL_FAILED_NEGO) != 0)
+	{
+		WLog_ERR(TAG, "Protocol security negotiation failed, disconnecting.");
+		return FALSE;
+	}
 
 	SelectedProtocol = nego_get_selected_protocol(nego);
 	status = FALSE;

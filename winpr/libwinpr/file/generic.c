@@ -76,6 +76,7 @@
 #include "../handle/handle.h"
 
 #include "../pipe/pipe.h"
+#include "../path/path.h"
 
 #include "file.h"
 
@@ -962,7 +963,7 @@ static BOOL is_valid_file_search_handle(HANDLE handle)
 	return TRUE;
 }
 
-static DWORD GetDosAttributesFromXAttr(const char* path)
+static DWORD GetDosAttributesFromXAttr(WINPR_ATTR_UNUSED const char* path)
 {
 #if defined(WINPR_HAVE_SYS_XATTR_H) || defined(WINPR_HAVE_LINUX_MSDOS_FS_H)
 	DWORD dwFileAttributes = 0;
@@ -996,9 +997,23 @@ static DWORD GetDosAttributesFromXAttr(const char* path)
 		int fd = open(path, O_RDONLY | O_CLOEXEC);
 		if (fd != -1)
 		{
-			ioctl(fd, FAT_IOCTL_GET_ATTRIBUTES, &intAttr);
-			close(fd);
-			dwFileAttributes = intAttr;
+			const int rc = ioctl(fd, FAT_IOCTL_GET_ATTRIBUTES, &intAttr);
+			if (rc < 0)
+			{
+				char buffer[64] = WINPR_C_ARRAY_INIT;
+				WLog_WARN(TAG, "ioctl(%d, FAT_IOCTL_GET_ATTRIBUTES) failed with %s", fd,
+				          winpr_strerror(errno, buffer, sizeof(buffer)));
+			}
+			else
+				dwFileAttributes = intAttr;
+
+			const int crc = close(fd);
+			if (crc < 0)
+			{
+				char buffer[64] = WINPR_C_ARRAY_INIT;
+				WLog_WARN(TAG, "close(%d) failed with %s", fd,
+				          winpr_strerror(errno, buffer, sizeof(buffer)));
+			}
 		}
 #endif
 	}
@@ -1049,7 +1064,7 @@ static void SetDosAttributesToXAttr(const char* path, DWORD dwFileAttributes)
 	}
 
 	/* set cifs.dosattrib xattr if it exists, otherwise set user.DOSATTRIB xattr */
-	ssize_t length = getxattr(path, "user.cifs.dosattrib", NULL, 0);
+	ssize_t length = getxattr(path, "user.cifs.dosattrib", nullptr, 0);
 	if (length >= 0)
 	{
 		if (setxattr(path, "user.cifs.dosattrib", &intAttrBE, sizeof(intAttrBE), 0) >= 0)
@@ -1317,15 +1332,11 @@ BOOL FindNextFileA(HANDLE hFindFile, LPWIN32_FIND_DATAA lpFindFileData)
 			memcpy(fullpath + pathlen, pDirent->d_name, namelen);
 			fullpath[pathlen + namelen] = 0;
 
-			char* canonical = nullptr;
-			const HRESULT hr = PathAllocCanonicalizeA(fullpath, 0, &canonical);
+			char* canonical = winpr_PathCanonicalize(fullpath);
 			free(fullpath);
 
-			if (S_OK != hr)
-			{
-				free(canonical);
+			if (!canonical)
 				continue;
-			}
 
 			struct stat fileStat = WINPR_C_ARRAY_INIT;
 			if (stat(canonical, &fileStat) != 0)
