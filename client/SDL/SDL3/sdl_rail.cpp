@@ -17,6 +17,7 @@
  * limitations under the License.
  */
 #include <algorithm>
+#include <limits>
 #include <tuple>
 
 #include <winpr/assert.h>
@@ -150,15 +151,23 @@ void SdlRail::sendWorkArea(const SDL_Rect& area)
 	if (SDL_RectsEqual(&area, &_sentWorkArea))
 		return;
 
+	const int maxCoord = std::numeric_limits<UINT16>::max();
+	const int left = std::clamp(area.x, 0, maxCoord);
+	const int top = std::clamp(area.y, 0, maxCoord);
+	const int right = std::clamp(area.x + area.w, 0, maxCoord);
+	const int bottom = std::clamp(area.y + area.h, 0, maxCoord);
+	if ((right <= left) || (bottom <= top))
+		return;
+
 	RAIL_SYSPARAM_ORDER param = {};
 	/* ClientSystemParam dispatches on the params mask, not .param. */
 	param.params = SPI_MASK_SET_WORK_AREA;
-	param.workArea.left = WINPR_ASSERTING_INT_CAST(UINT16, area.x);
-	param.workArea.top = WINPR_ASSERTING_INT_CAST(UINT16, area.y);
-	param.workArea.right = WINPR_ASSERTING_INT_CAST(UINT16, area.x + area.w);
-	param.workArea.bottom = WINPR_ASSERTING_INT_CAST(UINT16, area.y + area.h);
+	param.workArea.left = static_cast<UINT16>(left);
+	param.workArea.top = static_cast<UINT16>(top);
+	param.workArea.right = static_cast<UINT16>(right);
+	param.workArea.bottom = static_cast<UINT16>(bottom);
 	if (_rail->ClientSystemParam(_rail, &param) == CHANNEL_RC_OK)
-		_sentWorkArea = area;
+		_sentWorkArea = { left, top, right - left, bottom - top };
 }
 
 void SdlRail::handleMaximized(SDL_WindowID id)
@@ -174,6 +183,7 @@ void SdlRail::handleMaximized(SDL_WindowID id)
 		         static_cast<UINT32>(appWindow->id()));
 		return;
 	}
+	reportWindowDisplayWorkArea(appWindow);
 	appWindow->setRailMaximized(true);
 	/* Force full repaint (skips dirty-rect). */
 	appWindow->invalidateAll();
@@ -325,14 +335,6 @@ bool SdlRail::paint(SDL_Surface* primary, SDL_PixelFormat fallbackFormat,
 	if (!_enabled)
 		return true;
 
-	/* Report workarea once (avoids maximizing under local panels). */
-	if (_sentWorkArea.w == 0)
-	{
-		SDL_Rect usable{};
-		if (SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &usable))
-			sendWorkArea(usable);
-	}
-
 	std::unique_lock lock(_windowsLock);
 
 	/* Erase RDP-thread-deleted entries here so SDL windows die on the main thread. */
@@ -362,6 +364,8 @@ bool SdlRail::paint(SDL_Surface* primary, SDL_PixelFormat fallbackFormat,
 			parentRect = owner->outerRect(); /* the SDL window's on-screen geometry */
 		}
 		win.paint(primary, fallbackFormat, damage, parent, parentRect);
+			if (_sentWorkArea.w == 0)
+				reportWindowDisplayWorkArea(&win);
 		/* Adopt WM-refused geometry and update server. */
 		SDL_Rect refusedOuter{};
 		if (win.takeWmOverride(refusedOuter))
@@ -581,8 +585,10 @@ bool SdlRail::init(RailClientContext* rail)
 	         caps.positionsReadable ? 1 : 0, caps.supportsTransparentWindows ? 1 : 0);
 	/* Lockstep the WM-driven X11 resize to our frames via _NET_WM_SYNC_REQUEST to prevent
 	 * half-resized/torn frames during drag (especially on Xwayland). */
+	#if defined(SDL_HINT_VIDEO_X11_ENABLE_XSYNC_EXT)
 	if (caps.positionsReadable)
 		SDL_SetHint(SDL_HINT_VIDEO_X11_ENABLE_XSYNC_EXT, "1");
+	#endif
 	return true;
 }
 
@@ -944,6 +950,16 @@ void SdlRail::noteDragResize(SDL_WindowID id, int w, int h)
 /* Update server work area from maximized window bounds (caller holds _windowsLock). */
 void SdlRail::reportMaximizedWorkArea(SdlRailWindow* appWindow)
 {
+	if (!railPlatformCaps().positionsReadable)
+	{
+		int w = 0;
+		int h = 0;
+		SDL_GetWindowSize(appWindow->window(), &w, &h);
+		if ((w > 0) && (h > 0))
+			sendWorkArea({ 0, 0, w, h });
+		return;
+	}
+
 	int w = 0;
 	int h = 0;
 	SDL_GetWindowSize(appWindow->window(), &w, &h);
@@ -954,15 +970,51 @@ void SdlRail::reportMaximizedWorkArea(SdlRailWindow* appWindow)
 	if (railPlatformCaps().positionsReadable)
 		SDL_GetWindowPosition(appWindow->window(), &x, &y);
 
-	/* Clip work area within primary display bounds. */
-	SDL_Rect primary{};
-	if (!SDL_GetDisplayBounds(SDL_GetPrimaryDisplay(), &primary))
+	/* Clip work area within the display currently hosting the window. */
+	SDL_DisplayID display = SDL_GetDisplayForWindow(appWindow->window());
+	if (display == 0)
+		display = SDL_GetPrimaryDisplay();
+	SDL_Rect bounds{};
+	if (!SDL_GetDisplayBounds(display, &bounds))
 		return;
 	const SDL_Rect area = { x, y, w, h };
 	SDL_Rect overlap{};
-	if (!SDL_GetRectIntersection(&area, &primary, &overlap) || !SDL_RectsEqual(&overlap, &area))
+	if (!SDL_GetRectIntersection(&area, &bounds, &overlap) || !SDL_RectsEqual(&overlap, &area))
 		return;
 	sendWorkArea(area);
+}
+
+void SdlRail::reportWindowDisplayWorkArea(SdlRailWindow* appWindow)
+{
+	if (!appWindow || !appWindow->window())
+		return;
+
+	SDL_DisplayID display = SDL_GetDisplayForWindow(appWindow->window());
+	if (display == 0)
+		display = SDL_GetPrimaryDisplay();
+
+	SDL_Rect usable{};
+	if (!SDL_GetDisplayUsableBounds(display, &usable))
+		return;
+
+	const rdpMonitor monitor = _context->getDisplay(display);
+	int minX = monitor.x;
+	int minY = monitor.y;
+	for (const SDL_DisplayID id : _context->getDisplayIds())
+	{
+		const rdpMonitor other = _context->getDisplay(id);
+		minX = std::min<int>(minX, other.x);
+		minY = std::min<int>(minY, other.y);
+	}
+	SDL_Rect bounds{};
+	if (!SDL_GetDisplayBounds(display, &bounds))
+		bounds = usable;
+	const int relX = usable.x - bounds.x;
+	const int relY = usable.y - bounds.y;
+	/* RAIL work area is in remote desktop coordinates. With /span, those are the
+	 * monitor coordinates we advertised to the server, not necessarily SDL's
+	 * compositor-global bounds. */
+	sendWorkArea({ monitor.x - minX + relX, monitor.y - minY + relY, usable.w, usable.h });
 }
 
 void SdlRail::syncGeometry(SDL_WindowID id)

@@ -687,7 +687,7 @@ bool SdlRailWindow::reconcile(SDL_Window* parent, const SDL_Rect& parentRect)
 		/* Wayland: cap to the usable area - an oversized window cannot be dragged into reach. */
 		SDL_Rect usable{};
 		if (!railPlatformCaps().positionsReadable &&
-		    SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &usable))
+		    SDL_GetDisplayUsableBounds(_win->displayIndex(), &usable))
 		{
 			/* The local window is the outer frame: cap to the usable area plus the insets. */
 			const SDL_Rect bi = bandInsets();

@@ -139,6 +139,8 @@ class SdlRail
 	void sendWorkArea(const SDL_Rect& area);
 	/* Report a maximized window's WM-given geometry as the work area. Caller holds _windowsLock. */
 	void reportMaximizedWorkArea(SdlRailWindow* appWindow);
+		/* Report the usable bounds for the display currently hosting the RAIL window. */
+		void reportWindowDisplayWorkArea(SdlRailWindow* appWindow);
 	/* Clamp a window origin (x,y) so a w x h window stays inside the server desktop. */
 	void clampIntoDesktop(int& x, int& y, int w, int h) const;
 	/* Send a RAIL_SYSCOMMAND_ORDER for the window. Caller holds _windowsLock. */
