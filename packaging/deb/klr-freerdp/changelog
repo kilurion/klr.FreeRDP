@@ -1,0 +1,5 @@
+klr-freerdp (3.0.0) unstable; urgency=low
+
+  * Initial klr-freerdp packaging based on FreeRDP nightly packaging.
+
+ -- Kilurion <team@kilurion.com>  Mon, 31 Aug 2026 00:00:00 +0000

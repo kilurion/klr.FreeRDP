@@ -1,0 +1,6 @@
+opt/klr-freerdp/lib/*.so*
+opt/klr-freerdp/lib/freerdp3/proxy/*.so*
+opt/klr-freerdp/bin
+opt/klr-freerdp/share/man/man1/*
+opt/klr-freerdp/share/man/man7/*
+opt/klr-freerdp/share/FreeRDP/FreeRDP3/*
