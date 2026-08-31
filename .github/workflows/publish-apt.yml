@@ -12,7 +12,16 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    container:
+      image: ubuntu:26.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
     steps:
+      - name: Install git (required for checkout in container)
+        run: |
+          apt-get update -q -y
+          apt-get install -q -y git ca-certificates
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -21,9 +30,8 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update -q -y
-          sudo apt-get install -q -y devscripts equivs
-          sudo mk-build-deps --install --tool="apt-get -o Debug::pkgProblemResolver=yes --no-install-recommends -y" debian/control
+          apt-get install -q -y devscripts equivs
+          mk-build-deps --install --tool="apt-get -o Debug::pkgProblemResolver=yes --no-install-recommends -y" debian/control
 
       - name: Set package version
         id: ver
