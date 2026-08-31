@@ -1,0 +1,78 @@
+Package: klr-freerdp
+Version: 4.0.0~git20260831.9
+Architecture: amd64
+Maintainer: Kilurion <team@kilurion.com>
+Installed-Size: 20424
+Depends: libasan8 (>= 16-20260322-1ubuntu1), libasound2t64 (>= 1.0.18), libavcodec62 (>= 7:8.0.1), libavformat62 (>= 7:8.0), libavutil60 (>= 7:8.0.1), libc6 (>= 2.42), libcbor0.10 (>= 0.10.2), libcom-err2 (>= 1.43.9), libcups2t64 (>= 1.7.0), libfdk-aac2 (>= 2.0.1), libfido2-1 (>= 1.14.0), libfuse3-4 (>= 3.17.2), libgcc-s1 (>= 3.3.1), libice6 (>= 1:1.0.0), libicu78 (>= 78.1-1~), libjansson4 (>= 2.14), libk5crypto3 (>= 1.8+dfsg), libkrb5-3 (>= 1.15~beta1), libpam0g (>= 0.99.7.1), libsdl3-0 (>= 3.2.0), libsdl3-ttf0 (>= 3.2.0), libsm6 (>= 2:1.2.6), libsndio7.0 (>= 1.8.1), libssl3t64 (>= 3.0.0), libstdc++6 (>= 14), libswresample6 (>= 7:8.0.1), libswscale9 (>= 7:8.0.1), libsystemd0, liburiparser1 (>= 0.9.0), libusb-1.0-0 (>= 2:1.0.19), libwayland-client0 (>= 1.20.0), libx11-6 (>= 2:1.2.99.901), libxcursor1 (>> 1.1.2), libxdamage1 (>= 1:1.1), libxext6, libxfixes3, libxi6 (>= 2:1.2.99.4), libxinerama1 (>= 2:1.1.4), libxrandr2 (>= 2:1.5.0), libxrender1 (>= 1:0.9.12), libxtst6 (>= 2:1.2.5), libxv1 (>= 2:1.0.13), zlib1g (>= 1:1.1.4)
+Conflicts: freerdp-nightly, freerdp2-x11, freerdp3-x11
+Provides: freerdp
+Filename: pool/main/klr-freerdp_4.0.0~git20260831.9_amd64.deb
+Size: 4340568
+MD5sum: 0c9c191e77bb6ab6dd64c779c8f51b64
+SHA1: d71d635130a2922880fdcac23cca4a7633341ccc
+SHA256: 95970eb31f1d8dd06a10860bea48db3612303b62f5e0e8b22633d07c139de886
+Section: x11
+Priority: optional
+Homepage: https://freerdp.com/
+Description: RDP client for Windows Terminal Services (X11 client) - Kilurion fork
+ FreeRDP is a libre client/server implementation of the Remote
+ Desktop Protocol (RDP).
+ .
+ Currently, the FreeRDP client supports the following Windows Versions:
+ .
+  * Windows NT Server
+  * Windows 2000 Terminal Server
+  * Windows XP
+  * Windows 2003 Server
+  * Windows Vista
+  * Windows 2008/2008r2/2011SBS Server
+  * Windows 7
+  * Windows 2012 Server
+  * Windows 8
+ .
+ This package contains the X11 based client, built from Kilurion's custom fork.
+
+Package: klr-freerdp-dbg
+Source: klr-freerdp
+Version: 4.0.0~git20260831.9
+Architecture: amd64
+Maintainer: Kilurion <team@kilurion.com>
+Installed-Size: 21090
+Depends: klr-freerdp (= 4.0.0~git20260831.9)
+Filename: pool/main/klr-freerdp-dbg_4.0.0~git20260831.9_amd64.deb
+Size: 16470920
+MD5sum: 979def2797862a2a3629884ed104a1ea
+SHA1: 6810c28f34b69c6280547f3ab3eaa526aa36c5cb
+SHA256: a9bd4c708ed1de1078e8ebbcb1657fb4249f9ce0d88992a97cc2c2a4a1a9c44f
+Section: debug
+Priority: extra
+Homepage: https://freerdp.com/
+Description: RDP client for Windows Terminal Services (X11 client, debug symbols) - Kilurion fork
+ FreeRDP is a libre client/server implementation of the Remote
+ Desktop Protocol (RDP).
+ .
+ This package contains the debug symbols of the xfreerdp executable.
+Build-Ids: 16bdb9d43851a48dc1964ca19d82f9d5bab6c5ae 1adbe987570e6ddfaef47247fae4431fa27f17ef 21329733e3d9f24f3eb058aa5d15f027fe7834a8 28638d35ed62bc4723d96541f2108c59c9ffd9fb 291950389ec1fa719c3b77c69ed41c9d8a62e06c 2f98adf40d8d711f5985e15ffc25868b36393efa 4885521d44b11829b640a56ac097d8f0c408e5c9 49bafd9fda23ba3665261341f07cdc83f22b29cb 4fcc1a4092e681ea424be2114396f0a02c19d23e 552bcd0930fa53ab4238fc5cd6f14438112fd1d0 5d6faa00c30a7c589309bef3f8586132b476063c 7fd616a519bd25d4a18a417ad1278f75409c3a07 8c1cd5830b563f46ea319a03fb1b81f4145261b7 9b9bd6f3bc053ec6f6720d5cb08197a08fe5d2a7 a11f4132f105da499127ead2f861e0c6139299e0 e2a792b356af48200026d30fefe1d87281bdb620 e5b323622579f1735a80749affce43a5fc7c9bf3 e5e84bad48f60f45617fb9e77f7e39d4233a3e2c f2a1bd940894ef3e5b012d88505919fb32517229
+
+Package: klr-freerdp-dev
+Source: klr-freerdp
+Version: 4.0.0~git20260831.9
+Architecture: amd64
+Maintainer: Kilurion <team@kilurion.com>
+Installed-Size: 2397
+Depends: klr-freerdp (= 4.0.0~git20260831.9)
+Filename: pool/main/klr-freerdp-dev_4.0.0~git20260831.9_amd64.deb
+Size: 310168
+MD5sum: 022600d2a6f5260cec73c78c7829c5e0
+SHA1: c8b19f4ca38167695f0692634ade91fd072dc8a2
+SHA256: 16911618a06f62b4f64100aec668a98c10d5c608ec05b3bbab6aad285162e0e4
+Section: libdevel
+Priority: optional
+Multi-Arch: same
+Homepage: https://freerdp.com/
+Description: Free Remote Desktop Protocol library (development files) - Kilurion fork
+ FreeRDP is a libre client/server implementation of the Remote
+ Desktop Protocol (RDP).
+ .
+ This package contains the FreeRDP development files.
+
