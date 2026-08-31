@@ -16,6 +16,9 @@ jobs:
       image: ubuntu:26.04
     env:
       DEBIAN_FRONTEND: noninteractive
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Install git (required for checkout in container)
         run: |
