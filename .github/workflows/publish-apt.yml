@@ -39,7 +39,7 @@ jobs:
       - name: Set package version
         id: ver
         run: |
-          version="4.0.0~git$(date +%Y%m%d).${GITHUB_SHA::7}"
+          version="4.0.0~git$(date +%Y%m%d).${GITHUB_RUN_NUMBER}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           dch --package klr-freerdp --newversion "$version" --distribution unstable --urgency low "Automated build from commit $GITHUB_SHA"
 
