@@ -167,7 +167,7 @@ BOOL readBitmapInfoHeader(wStream* s, WINPR_BITMAP_INFO_HEADER* bi, size_t* poff
 			{
 				DWORD used = bi->biClrUsed;
 				if (used == 0)
-					used = (1u << bi->biBitCount) / 8;
+					used = 1u << bi->biBitCount;
 				offset += sizeof(RGBQUAD) * used;
 			}
 			if (bi->biSizeImage == 0)
@@ -192,7 +192,9 @@ BOOL readBitmapInfoHeader(wStream* s, WINPR_BITMAP_INFO_HEADER* bi, size_t* poff
 			}
 			break;
 		case BI_BITFIELDS:
-			offset += sizeof(DWORD) * 3; // 3 DWORD color masks
+			/* BITMAPV4HEADER and BITMAPV5HEADER include the color masks in biSize. */
+			if (bi->biSize == sizeof(WINPR_BITMAP_INFO_HEADER))
+				offset += sizeof(DWORD) * 3; // 3 DWORD color masks
 			break;
 		default:
 			WLog_ERR(TAG, "unsupported biCompression %" PRIu32, bi->biCompression);
@@ -457,14 +459,19 @@ static int winpr_image_bitmap_read_buffer(wImage* image, const BYTE* buffer, siz
 	image->type = WINPR_IMAGE_BITMAP;
 
 	{
+		/* bfOffBits may include color masks, a color table or padding after the
+		 * info header. It must leave room for the required color data. */
 		const size_t pos = Stream_GetPosition(s);
 		const size_t expect = bf.bfOffBits;
-		if (pos != expect)
+		if ((pos > expect) || (bmpoffset > expect - pos))
 		{
 			WLog_WARN(TAG, "pos=%" PRIuz ", expected %" PRIuz ", offset=%" PRIuz, pos, expect,
 			          bmpoffset);
 			goto fail;
 		}
+
+		if (!Stream_SafeSeek(s, expect - pos))
+			goto fail;
 	}
 
 	if (!Stream_CheckAndLogRequiredLength(TAG, s, bi.biSizeImage))

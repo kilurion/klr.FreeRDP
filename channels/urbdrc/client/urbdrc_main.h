@@ -27,6 +27,8 @@
 
 #include <msusb.h>
 
+#include "urbdrc_types.h"
+
 #define DEVICE_HARDWARE_ID_SIZE 32
 #define DEVICE_COMPATIBILITY_ID_SIZE 36
 #define DEVICE_INSTANCE_STR_SIZE 37
@@ -138,6 +140,9 @@ struct S_IUDEVICE
 	WINPR_ATTR_NODISCARD int (*cancel_transfer_request)(IUDEVICE* idev, UINT32 RequestId);
 
 	WINPR_ATTR_NODISCARD int (*query_device_descriptor)(IUDEVICE* idev, int offset);
+
+	/** Negotiated bus speed. */
+	WINPR_ATTR_NODISCARD enum device_speed (*query_device_speed)(IUDEVICE* idev);
 
 	WINPR_ATTR_NODISCARD BOOL (*detach_kernel_driver)(IUDEVICE* idev);
 

@@ -388,7 +388,7 @@ static BOOL xf_cliprdr_is_atom_available(xfClipboard* clipboard, Atom atom)
 	WINPR_ASSERT(clipboard);
 
 	char* name = Safe_XGetAtomName(clipboard->log, clipboard->xfc->display, atom);
-	for (size_t x = 0; x < clipboard->numClientFormats; x++)
+	for (size_t x = 0; x < clipboard->clientAvailableFormatAtomsCount; x++)
 	{
 		WINPR_ASSERT(clipboard->clientAvailableFormatAtoms);
 
@@ -727,6 +727,7 @@ static BOOL xf_cliprdr_should_add_format(const CLIPRDR_FORMAT* formats, size_t c
 	return TRUE;
 }
 
+WINPR_ATTR_NODISCARD
 static CLIPRDR_FORMAT* xf_cliprdr_get_formats_from_targets(xfClipboard* clipboard,
                                                            UINT32* numFormats, Atom** atoms,
                                                            size_t* atomsCount)
@@ -740,14 +741,14 @@ static CLIPRDR_FORMAT* xf_cliprdr_get_formats_from_targets(xfClipboard* clipboar
 
 	WINPR_ASSERT(clipboard);
 	WINPR_ASSERT(numFormats);
+	WINPR_ASSERT(atoms);
+	WINPR_ASSERT(atomsCount);
 
 	xfContext* xfc = clipboard->xfc;
 	WINPR_ASSERT(xfc);
 
 	*numFormats = 0;
-	if (atomsCount)
-		*atomsCount = 0;
-	if (atoms)
+	*atomsCount = 0;
 	{
 		XFree(*atoms);
 		*atoms = nullptr;
@@ -830,16 +831,16 @@ out:
 
 	if (data && !atoms)
 		XFree(data);
-	else if (atoms)
+	else if (atoms && data)
 	{
 		*atoms = (Atom*)data;
-		if (atomsCount)
-			*atomsCount = proplength;
+		*atomsCount = proplength;
 	}
 
 	return formats;
 }
 
+WINPR_ATTR_NODISCARD
 static CLIPRDR_FORMAT* xf_cliprdr_get_client_formats(xfClipboard* clipboard, UINT32* numFormats,
                                                      Atom** atoms, size_t* atomsCount)
 {
@@ -847,20 +848,18 @@ static CLIPRDR_FORMAT* xf_cliprdr_get_client_formats(xfClipboard* clipboard, UIN
 
 	WINPR_ASSERT(clipboard);
 	WINPR_ASSERT(numFormats);
+	WINPR_ASSERT(atoms);
+	WINPR_ASSERT(atomsCount);
 
 	*numFormats = 0;
-	if (atoms)
+	*atomsCount = 0;
 	{
 		XFree(*atoms);
 		*atoms = nullptr;
 	}
-	if (atomsCount)
-		*atomsCount = 0;
 
 	if (xf_cliprdr_is_raw_transfer_available(clipboard))
-	{
 		formats = xf_cliprdr_get_raw_server_formats(clipboard, numFormats);
-	}
 
 	if (*numFormats == 0)
 	{
@@ -948,6 +947,7 @@ static UINT xf_cliprdr_send_format_list(xfClipboard* clipboard, const CLIPRDR_FO
 
 	WINPR_ASSERT(clipboard);
 	WINPR_ASSERT(formats || (numFormats == 0));
+	WINPR_ASSERT(atoms || (atomsCount == 0));
 
 #if defined(WITH_DEBUG_CLIPRDR)
 	for (UINT32 x = 0; x < numFormats; x++)

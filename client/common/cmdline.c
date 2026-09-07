@@ -781,6 +781,8 @@ BOOL freerdp_client_add_device_channel(rdpSettings* settings, size_t count,
                                        const char* const* params)
 {
 	WINPR_ASSERT(settings);
+	if (count == 0)
+		return FALSE;
 	WINPR_ASSERT(params);
 	WINPR_ASSERT(count > 0);
 
@@ -913,6 +915,8 @@ BOOL freerdp_client_add_static_channel(rdpSettings* settings, size_t count,
                                        const char* const* params)
 {
 	ADDIN_ARGV* _args = nullptr;
+	if (count == 0)
+		return FALSE;
 
 	if (!settings || !params || !params[0] || (count > INT_MAX))
 		return FALSE;
@@ -944,6 +948,8 @@ BOOL freerdp_client_add_dynamic_channel(rdpSettings* settings, size_t count,
 {
 	ADDIN_ARGV* _args = nullptr;
 
+	if (count == 0)
+		return FALSE;
 	if (!settings || !params || !params[0] || (count > INT_MAX))
 		return FALSE;
 
@@ -4363,6 +4369,19 @@ static BOOL parse_gateway_options(rdpSettings* settings, const COMMAND_LINE_ARGU
 			if (um)
 			{
 				if (!parse_gateway_usage_option(settings, um))
+					goto fail;
+				validOption = TRUE;
+				allowHttpOpts = FALSE;
+			}
+
+			const char* to = option_starts_with("timeout:", argval);
+			if (to)
+			{
+				LONGLONG val = 0;
+				if (!value_to_int(to, &val, 1, 600000))
+					goto fail;
+				if (!freerdp_settings_set_uint32(settings, FreeRDP_GatewayResponseTimeout,
+				                                 (UINT32)val))
 					goto fail;
 				validOption = TRUE;
 				allowHttpOpts = FALSE;

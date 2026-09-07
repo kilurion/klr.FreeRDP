@@ -709,6 +709,11 @@ static UINT gdi_SurfaceCommand_AVC420(rdpGdi* gdi, RdpgfxClientContext* context,
 			return ERROR_NOT_ENOUGH_MEMORY;
 		}
 
+		if (!h264_context_set_option(
+		        surface->h264, H264_CONTEXT_OPTION_HW_ACCEL,
+		        (UINT32)freerdp_settings_get_bool(gdi->context->settings, FreeRDP_SoftwareGdi)))
+			return ERROR_INTERNAL_ERROR;
+
 		if (!h264_context_reset(surface->h264, surface->width, surface->height))
 			return ERROR_INTERNAL_ERROR;
 	}
@@ -798,6 +803,10 @@ static UINT gdi_SurfaceCommand_AVC444(rdpGdi* gdi, RdpgfxClientContext* context,
 			return ERROR_NOT_ENOUGH_MEMORY;
 		}
 
+		if (!h264_context_set_option(
+		        surface->h264, H264_CONTEXT_OPTION_HW_ACCEL,
+		        (UINT32)freerdp_settings_get_bool(gdi->context->settings, FreeRDP_SoftwareGdi)))
+			return ERROR_INTERNAL_ERROR;
 		if (!h264_context_reset(surface->h264, surface->width, surface->height))
 			return ERROR_INTERNAL_ERROR;
 	}
@@ -1041,7 +1050,9 @@ static void dump_cmd(const RDPGFX_SURFACE_COMMAND* cmd, UINT32 frameId)
 	WINPR_ASSERT(cmd);
 	char fname[1024] = WINPR_C_ARRAY_INIT;
 
-	snprintf(fname, sizeof(fname), "%s/%08" PRIx64 ".raw", path, xxx++);
+	if (_snprintf(fname, sizeof(fname), "%s/%08" PRIx64 ".raw", path, xxx++) < 0)
+		return;
+
 	FILE* fp = fopen(fname, "w");
 	if (!fp)
 		return;
@@ -1288,6 +1299,8 @@ static UINT gdi_CreateSurface(RdpgfxClientContext* context,
 	surface->outputTargetWidth = createSurface->width;
 	surface->outputTargetHeight = createSurface->height;
 
+	const BOOL rails =
+	    freerdp_settings_get_bool(gdi->context->settings, FreeRDP_RemoteApplicationMode);
 	switch (createSurface->pixelFormat)
 	{
 		case GFX_PIXEL_FORMAT_ARGB_8888:
@@ -1295,7 +1308,7 @@ static UINT gdi_CreateSurface(RdpgfxClientContext* context,
 			break;
 
 		case GFX_PIXEL_FORMAT_XRGB_8888:
-			surface->format = PIXEL_FORMAT_BGRA32;
+			surface->format = rails ? PIXEL_FORMAT_BGRA32 : PIXEL_FORMAT_BGRX32;
 			break;
 
 		default:
