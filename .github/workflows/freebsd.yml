@@ -8,6 +8,7 @@ on:
 jobs:
   freebsd_job:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'schedule' || github.repository == 'FreeRDP/FreeRDP' }}
     strategy:
       matrix:
         freebsd-version: ["15.0", "14.4"]

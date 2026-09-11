@@ -12,6 +12,7 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    if: ${{ github.event_name != 'schedule' || github.repository == 'FreeRDP/FreeRDP' }}
 
     permissions:
       contents: write

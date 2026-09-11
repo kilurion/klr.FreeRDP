@@ -16,6 +16,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     name: "Run ABI checker on ubuntu-latest"
+    if: ${{ github.event_name != 'schedule' || github.repository == 'FreeRDP/FreeRDP' }}
     steps:
       - name: "Check out pull request"
         if: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'pull_request'  }}

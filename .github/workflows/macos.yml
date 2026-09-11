@@ -9,6 +9,7 @@ jobs:
   build:
     runs-on: macos-latest
     name: "Run macos build on mac-latest"
+    if: ${{ github.event_name != 'schedule' || github.repository == 'FreeRDP/FreeRDP' }}
     steps:
       - name: "Check out source"
         uses: actions/checkout@v7
