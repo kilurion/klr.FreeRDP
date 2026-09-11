@@ -149,6 +149,16 @@ if(WITHOUT_WINPR_3x_DEPRECATED)
   add_compile_definitions(WITHOUT_WINPR_3x_DEPRECATED)
 endif()
 
+option(
+  DISABLE_SUPPORTED_ARCH_CHECKS
+  "[experimental,dangerous,unsupported] Build for unknown systems or such missing essential features (unaligned memory access, ...)"
+  OFF
+)
+if(DISABLE_SUPPORTED_ARCH_CHECKS)
+  include(WarnExperimental)
+  warn_experimental("Skip PlatformChecks" "-DDISABLE_SUPPORTED_ARCH_CHECKS=OFF")
+endif()
+
 # Include cmake modules
 include(CheckIncludeFiles)
 include(CheckLibraryExists)
@@ -381,7 +391,11 @@ list(JOIN WINPR_PC_REQUIRES_PRIVATE " " WINPR_PC_REQUIRES_PRIVATE)
 
 set(WINPR_PC_LIBRARY_PRIVATE "")
 include(PkgConfigAddThreads)
-pkg_config_add_threads(WINPR_PC_LIBRARY_PRIVATE ${CMAKE_DL_LIBS} rt m)
+if(OPENBSD)
+  pkg_config_add_threads(WINPR_PC_LIBRARY_PRIVATE m)
+else()
+  pkg_config_add_threads(WINPR_PC_LIBRARY_PRIVATE ${CMAKE_DL_LIBS} rt m)
+endif()
 
 # Do not set Requires.Private if not a static build
 if(BUILD_SHARED_LIBS)
@@ -396,6 +410,61 @@ endif()
 if(BUILD_TESTING_INTERNAL OR BUILD_TESTING)
   add_subdirectory(test)
 endif()
+
+set(WINPR_BUILD_CONFIG_DEBUG_FILTER
+    WITH_DEBUG_THREADS
+    WITH_DEBUG_EVENTS
+    WITH_DEBUG_SYMBOLS
+    WITH_DEBUG_MUTEX
+    WITH_DEBUG_NTLM
+    WITH_DEBUG_NLA
+    WITH_DEBUG_SCHANNEL
+    WITH_DEBUG_UTILS_CMDLINE_DUMP
+    WITH_DEBUG_STREAMPOOL
+)
+set(WINPR_BUILD_CONFIG_FILTER
+    ${WINPR_BUILD_CONFIG_DEBUG_FILTER}
+    WITH_LIBRESSL
+    WITH_WINPR_TOOLS
+    WITH_WINPR_DEPRECATED
+    WITHOUT_WINPR_3x_DEPRECATED
+    WITH_NATIVE_SSPI
+    WITH_SMARTCARD_INSPECT
+    WITH_INTERNAL_RC4
+    WITH_INTERNAL_MD4
+    WITH_INTERNAL_MD5
+    WITH_UNICODE_BUILTIN
+    WINPR_USE_LEGACY_RESOURCE_DIR
+    WINPR_USE_VENDOR_PRODUCT_CONFIG_DIR
+    SSPI_DLL
+    WITH_POLL
+    WITH_PKCS11
+    WITH_URIPARSER
+    WITH_SMARTCARD_PCSC
+    WITH_KRB5
+    WITH_TIMEZONE_COMPILED
+    WITH_TIMEZONE_ICU
+    WITH_TIMEZONE_UPDATER
+    WITH_LODEPNG
+    WINPR_UTILS_IMAGE_DIBv5
+    WINPR_UTILS_IMAGE_PNG
+    WINPR_UTILS_IMAGE_WEBP
+    WINPR_UTILS_IMAGE_JPEG
+    WITH_SYSTEMD
+    USE_EXECINFO
+    USE_UNWIND
+    WITH_WINPR_TOOLS_CLI
+)
+
+set(WINPR_BUILD_CONFIG_LIST "")
+get_cmake_property(res VARIABLES)
+foreach(var ${res})
+  list(FIND WINPR_BUILD_CONFIG_FILTER ${var} LOOP_VAR_FOUND)
+  if(LOOP_VAR_FOUND GREATER -1)
+    list(APPEND WINPR_BUILD_CONFIG_LIST "${var}=${${var}}")
+  endif()
+endforeach()
+string(REPLACE ";" " " WINPR_BUILD_CONFIG "${WINPR_BUILD_CONFIG_LIST}")
 
 add_subdirectory(include)
 

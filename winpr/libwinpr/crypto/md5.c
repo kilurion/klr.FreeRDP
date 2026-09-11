@@ -37,6 +37,8 @@
 
 #include <string.h>
 
+#include <winpr/cast.h>
+
 #include "md5.h"
 
 /*
@@ -90,8 +92,8 @@ static inline winpr_MD5_u32plus I(winpr_MD5_u32plus x, winpr_MD5_u32plus y, winp
  * link-time optimizations.  For the time being, keeping these MD5 routines in
  * their own translation unit avoids the problem.
  */
-#if defined(__i386__) || defined(__x86_64__) || defined(__vax__)
-#define SET(n) (*(const winpr_MD5_u32plus*)&ptr[4ULL * (n)])
+#if defined(WINPR_ARCH_SUPPORTED)
+#define SET(n) (*(WINPR_PACKED_ALIGN_CAST(const winpr_MD5_u32plus*, &ptr[4ULL * (n)])))
 #define GET(n) SET(n)
 #else
 #define SET(n)                                                          \
