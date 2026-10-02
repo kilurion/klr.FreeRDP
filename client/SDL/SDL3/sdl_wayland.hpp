@@ -20,10 +20,7 @@
 
 #include <SDL3/SDL.h>
 
-/* Native Wayland helpers for the RAIL client. Compositor-driven interactive move
- * (xdg_toplevel.move) needs a button serial SDL does not expose, so this module binds its own
- * wl_seat/wl_pointer to capture it. Main thread only; each function is a safe no-op off the Wayland
- * backend. */
+/* Native Wayland helpers for RAIL client interactive move/resize. */
 
 /* Bind the seat/pointer early (at window creation) or the first move's press serial is missed. */
 void sdl_wayland_move_prepare(SDL_Window* window);

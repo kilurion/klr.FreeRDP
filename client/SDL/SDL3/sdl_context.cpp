@@ -31,10 +31,7 @@
 #include <scoped_guard.hpp>
 
 #include "dialogs/sdl_dialogs.hpp"
-
-#if defined(WITH_WEBVIEW)
-#include <aad/sdl_webview.hpp>
-#endif
+#include <freerdp/client/aad_helper.h>
 
 static constexpr auto sdl_allow_screensaver = "sdl-allow-screensaver";
 
@@ -60,12 +57,8 @@ SdlContext::SdlContext(rdpContext* context)
 	instance->PresentGatewayMessage = sdl_present_gateway_message;
 	instance->ChooseSmartcard = sdl_choose_smartcard;
 	instance->RetryDialog = sdl_retry_dialog;
+	instance->GetAccessToken = client_failsafe_get_access_token;
 
-#ifdef WITH_WEBVIEW
-	instance->GetAccessToken = sdl_webview_get_access_token;
-#else
-	instance->GetAccessToken = client_cli_get_access_token;
-#endif
 	/* TODO: Client display set up */
 
 	_args.push_back({ sdl_allow_screensaver, COMMAND_LINE_VALUE_BOOL, nullptr, BoolValueFalse,
@@ -848,20 +841,45 @@ SdlContext::updateDisplayOffsetsForNeighbours(SDL_DisplayID id,
 			continue;
 
 		bool neighbor = false;
-		if (alignX(entry.second.first, first.first))
+		const bool ax = alignX(entry.second.first, first.first);
+		const bool ay = alignY(entry.second.first, first.first);
+
+		/* Offset along the axis that does not touch, converted from logical to pixel
+		 * units of the reference display. Without this, a monitor that is adjacent on
+		 * one axis but shifted on the other (e.g. a wider monitor above another, or a
+		 * rotated monitor that is not top aligned) keeps offset 0 on that axis, the
+		 * layout sent to the server no longer matches the local one and pointer input
+		 * lands offset by that difference. */
+		auto crossOffset = [](int ePos, int fPos, int fLogical, int fPixel) -> int
+		{
+			if (fLogical <= 0)
+				return ePos - fPos;
+			return static_cast<int>(
+			    std::lround(static_cast<double>(ePos - fPos) * fPixel / fLogical));
+		};
+
+		if (ax)
 		{
 			if (entry.second.first.x < first.first.x)
 				entry.second.second.x = first.second.x - entry.second.second.w;
 			else
 				entry.second.second.x = first.second.x + first.second.w;
+			if (!ay)
+				entry.second.second.y =
+				    first.second.y +
+				    crossOffset(entry.second.first.y, first.first.y, first.first.h, first.second.h);
 			neighbor = true;
 		}
-		if (alignY(entry.second.first, first.first))
+		if (ay)
 		{
 			if (entry.second.first.y < first.first.y)
 				entry.second.second.y = first.second.y - entry.second.second.h;
 			else
 				entry.second.second.y = first.second.y + first.second.h;
+			if (!ax)
+				entry.second.second.x =
+				    first.second.x +
+				    crossOffset(entry.second.first.x, first.first.x, first.first.w, first.second.w);
 			neighbor = true;
 		}
 
@@ -1133,10 +1151,8 @@ bool SdlContext::handleEvent(const SDL_WindowEvent& ev)
 					_rail.noteResizeGrab(ev.windowID);
 					return true;
 				case SDL_EVENT_WINDOW_EXPOSED:
-					/* Force a repaint: we skip undamaged RAIL windows, so a re-exposed one is
-					 * stale. Not during a local drag: X exposes every resize step and the drag
-					 * path already repaints per configure - a second present per step just feeds
-					 * the compositor stale frames. */
+					/* Force repaint for exposed windows; skip during local drag to avoid redundant
+					 * frames. */
 					if (!_rail.suppressServerInput(ev.windowID))
 						_rail.invalidateWindow(ev.windowID);
 					return true;
@@ -1638,7 +1654,7 @@ bool SdlContext::drawToWindows(const std::vector<SDL_Rect>& rects)
 
 		std::unique_lock lock(_critical);
 		_rail.paint(_primary.get(), pixelFormat(), rects);
-		return TRUE;
+		return true;
 	}
 
 	/* Non-RAIL mode (e.g. Non-Monitored Desktop during UAC / Consent UI): show the desktop window.
@@ -1653,6 +1669,9 @@ bool SdlContext::drawToWindows(const std::vector<SDL_Rect>& rects)
 			firstShow = true;
 		}
 	}
+
+	if (rects.empty() && !firstShow)
+		return true;
 
 	std::vector<SDL_Rect> drawRects = rects;
 	{
@@ -1778,7 +1797,7 @@ rdpPointer* SdlContext::cursor() const
 
 bool SdlContext::restoreCursor()
 {
-	WLog_Print(getWLog(), WLOG_DEBUG, "restore cursor: %d", _cursorType);
+	WLog_Print(getWLog(), WLOG_TRACE, "restore cursor: %d", _cursorType);
 	switch (_cursorType)
 	{
 		case CURSOR_NULL:

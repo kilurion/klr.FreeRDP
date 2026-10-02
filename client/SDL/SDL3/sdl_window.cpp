@@ -56,8 +56,7 @@ SdlWindow::SdlWindow(SDL_DisplayID id, const std::string& title, const SDL_Rect&
 	if (flags & SDL_WINDOW_TRANSPARENT)
 		SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_TRANSPARENT_BOOLEAN, true);
 
-	/* RAIL passes SDL_WINDOW_HIDDEN so it can map the window only after the first paint (no black
-	 * flash); a plain session window has no such flag and is shown immediately. */
+	/* RAIL windows are created hidden until first paint to avoid black flash. */
 	if (flags & SDL_WINDOW_HIDDEN)
 		SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIDDEN_BOOLEAN, true);
 
@@ -479,6 +478,13 @@ SDL_Rect SdlWindow::rect(SDL_Window* window, bool forceAsPrimary)
 				rect.x = 0;
 				rect.y = 0;
 			}
+			else
+			{
+				/* The dummy window is centered on the display by the compositor, so its
+				 * position is not the display origin. Use the display bounds as for w/h. */
+				rect.x = displayBounds.x;
+				rect.y = displayBounds.y;
+			}
 			rect.w = displayBounds.w;
 			rect.h = displayBounds.h;
 
@@ -595,15 +601,20 @@ void SdlWindow::updateSurface()
 }
 
 bool SdlWindow::paintResizeFrame(SDL_Surface* surface, SDL_Point off, bool contentChanged,
-                                 const SDL_Rect& inset, bool dashedBorder)
+                                 const SDL_Rect& inset, bool fillRevealed, bool dashedBorder)
 {
 	if (!_renderer || !surface)
 		return false;
 	ensureRenderTarget();
 
+	const int prevW = _gdiTextureW;
+	const int prevH = _gdiTextureH;
 	if (!ensureGdiTexture(surface))
 		return false;
-	if (!SDL_UpdateTexture(_gdiTexture, nullptr, surface->pixels, surface->pitch))
+	/* A recreated texture is empty, so upload even when the content did not change. */
+	const bool recreated = (_gdiTextureW != prevW) || (_gdiTextureH != prevH);
+	if ((contentChanged || recreated) &&
+	    !SDL_UpdateTexture(_gdiTexture, nullptr, surface->pixels, surface->pitch))
 		return false;
 
 	if (!SDL_SetRenderTarget(_renderer, _renderTarget))
@@ -617,24 +628,25 @@ bool SdlWindow::paintResizeFrame(SDL_Surface* surface, SDL_Point off, bool conte
 		                      static_cast<float>(ww - inset.x - inset.w),
 		                      static_cast<float>(wh - inset.y - inset.h) };
 
-	/* Translucent "waiting for the server" fill so the desktop shows through the revealed area.
-	 * Verbatim writes: blending 0x80 over the transparent target would halve it again. */
-	constexpr Uint8 kFillAlpha = 0x80; /* ~50% */
+	/* Translucent fill in revealed area awaiting server frame. */
+	constexpr Uint8 kFillAlpha = 0x80;
 	std::ignore = SDL_SetRenderDrawBlendMode(_renderer, SDL_BLENDMODE_NONE);
 	std::ignore = SDL_SetRenderDrawColor(_renderer, 0, 0, 0, 0);
 	std::ignore = SDL_RenderClear(_renderer);
-	std::ignore = SDL_SetRenderDrawColor(_renderer, 0x2B, 0x2B, 0x2B, kFillAlpha);
-	std::ignore = SDL_RenderFillRect(_renderer, &frame);
+	if (fillRevealed)
+	{
+		std::ignore = SDL_SetRenderDrawColor(_renderer, 0x2B, 0x2B, 0x2B, kFillAlpha);
+		std::ignore = SDL_RenderFillRect(_renderer, &frame);
+	}
 	SDL_FRect fdst = { static_cast<float>(off.x), static_cast<float>(off.y),
 		               static_cast<float>(surface->w), static_cast<float>(surface->h) };
-	/* Anchored old frame stays opaque over the translucent fill; clipped so it can't overflow
-	 * into the band ring when shrinking (the dashed border must read as the window edge). */
+	/* Anchored frame clipped to visible bounds. */
 	const SDL_Rect clip = { inset.x, inset.y, ww - inset.x - inset.w, wh - inset.y - inset.h };
 	std::ignore = SDL_SetRenderClipRect(_renderer, &clip);
 	std::ignore = SDL_RenderTexture(_renderer, _gdiTexture, nullptr, &fdst);
 	std::ignore = SDL_SetRenderClipRect(_renderer, nullptr);
 
-	/* Dashed border on the visible frame: "you dragged the window to here, awaiting content". */
+	/* Dashed border indicating pending resize target. */
 	if (dashedBorder)
 	{
 		std::ignore = SDL_SetRenderDrawColor(_renderer, 0xC8, 0xC8, 0xC8, 0xFF);
@@ -646,14 +658,19 @@ bool SdlWindow::paintResizeFrame(SDL_Surface* surface, SDL_Point off, bool conte
 		const float by = fy2 - 0.5F;
 		const float lx = frame.x + 0.5F;
 		const float rx = fx2 - 0.5F;
-		for (float x = frame.x; x < fx2; x += dash + gap)
+		const float step = dash + gap;
+		const auto steps = [step](float len)
+		{ return (len <= 0.0F) ? 0 : static_cast<int>(std::ceil(len / step)); };
+		for (int i = 0; i < steps(fx2 - frame.x); i++)
 		{
+			const float x = frame.x + (static_cast<float>(i) * step);
 			const float x2 = (x + dash < fx2) ? (x + dash) : rx;
 			std::ignore = SDL_RenderLine(_renderer, x, lo, x2, lo);
 			std::ignore = SDL_RenderLine(_renderer, x, by, x2, by);
 		}
-		for (float y = frame.y; y < fy2; y += dash + gap)
+		for (int i = 0; i < steps(fy2 - frame.y); i++)
 		{
+			const float y = frame.y + (static_cast<float>(i) * step);
 			const float y2 = (y + dash < fy2) ? (y + dash) : by;
 			std::ignore = SDL_RenderLine(_renderer, lx, y, lx, y2);
 			std::ignore = SDL_RenderLine(_renderer, rx, y, rx, y2);
@@ -699,12 +716,15 @@ SdlWindow SdlWindow::create(SDL_DisplayID id, const std::string& title, Uint32 f
 }
 
 /* Popup constructor: positioned relative to the parent origin. */
-SdlWindow::SdlWindow(SDL_Window* parent, const SDL_Rect& rect, bool transparent)
+SdlWindow::SdlWindow(SDL_Window* parent, const SDL_Rect& rect, bool transparent, bool tooltip)
     : _initialW(rect.w), _initialH(rect.h)
 {
 	auto props = SDL_CreateProperties();
 	SDL_SetPointerProperty(props, SDL_PROP_WINDOW_CREATE_PARENT_POINTER, parent);
-	SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_MENU_BOOLEAN, true);
+	SDL_SetBooleanProperty(props,
+	                       tooltip ? SDL_PROP_WINDOW_CREATE_TOOLTIP_BOOLEAN
+	                               : SDL_PROP_WINDOW_CREATE_MENU_BOOLEAN,
+	                       true);
 	SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FOCUSABLE_BOOLEAN, false);
 	SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_BORDERLESS_BOOLEAN, true);
 	/* Transparent so menus' genuine per-pixel alpha (corners/shadow) isn't rendered black. */
@@ -727,9 +747,10 @@ SdlWindow::SdlWindow(SDL_Window* parent, const SDL_Rect& rect, bool transparent)
 	}
 }
 
-SdlWindow SdlWindow::createPopup(SDL_Window* parent, const SDL_Rect& rect, bool transparent)
+SdlWindow SdlWindow::createPopup(SDL_Window* parent, const SDL_Rect& rect, bool transparent,
+                                 bool tooltip)
 {
-	return SdlWindow{ parent, rect, transparent };
+	return SdlWindow{ parent, rect, transparent, tooltip };
 }
 
 static SDL_Window* createDummy(SDL_DisplayID id)

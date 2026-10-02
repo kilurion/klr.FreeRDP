@@ -39,8 +39,6 @@ void sdl_OnChannelConnectedEventHandler(void* context, const ChannelConnectedEve
 	WINPR_ASSERT(sdl);
 	WINPR_ASSERT(e);
 
-	WLog_Print(sdl->getWLog(), WLOG_DEBUG, "channel connected: %s", e->name);
-
 	if (strcmp(e->name, RAIL_SVC_CHANNEL_NAME) == 0)
 	{
 		auto rail = reinterpret_cast<RailClientContext*>(e->pInterface);
@@ -71,7 +69,8 @@ void sdl_OnChannelConnectedEventHandler(void* context, const ChannelConnectedEve
 		 * to route window-mapped surfaces to RAIL. */
 		freerdp_client_OnChannelConnectedEventHandler(context, e);
 		auto gfx = reinterpret_cast<RdpgfxClientContext*>(e->pInterface);
-		if (gfx)
+		auto ctx = static_cast<rdpContext*>(context);
+		if (gfx && freerdp_settings_get_bool(ctx->settings, FreeRDP_RemoteApplicationMode))
 			gfx->UpdateWindowFromSurface = SdlRail::UpdateWindowFromSurface;
 	}
 	else

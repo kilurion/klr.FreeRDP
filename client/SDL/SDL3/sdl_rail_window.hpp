@@ -129,6 +129,8 @@ class SdlRailWindow
 	[[nodiscard]] bool isLayered() const;
 	/* Mark shadow anchored to an active popup. */
 	void setShadowAnchored(bool anchored);
+	void setFrame(bool frame);
+	[[nodiscard]] bool isFrame() const;
 	/* Local window insets for resize bands. */
 	[[nodiscard]] SDL_Rect insets() const;
 	/* Server rect inflated by insets() = the local SDL window's on-screen geometry. */
@@ -140,7 +142,6 @@ class SdlRailWindow
 
 	void setStyle(uint32_t style, uint32_t exStyle);
 	void setTitle(const std::string& title);
-	void setTitle(const char16_t* str, size_t lenBytes);
 	void setVisible(bool visible);
 	/* Window icon (WindowIcon/WindowCachedIcon orders); applied in reconcile. */
 	void setIcon(const SdlRailIcon& icon);
@@ -148,6 +149,7 @@ class SdlRailWindow
 	/* --- main thread only (SDL window ops) --- */
 
 	/* Window-mapped GFX surface (RDP thread): deep-copies the damaged gdi pixels for paint(). */
+	[[nodiscard]] bool takeSurfaceChange(uint32_t surfaceId);
 	void updateGfxSurface(const void* data, uint32_t stride, uint32_t width, uint32_t height,
 	                      const RECTANGLE_16* damage, uint32_t nbDamage, uint32_t format);
 	/* Mark the whole window dirty for re-blit (e.g. on expose). */
@@ -174,15 +176,23 @@ class SdlRailWindow
 		_minState.rail = m;
 	}
 	void setServerMinimized(bool m);
-	/* Effective maximized state (local or server-declared). */
-	[[nodiscard]] bool maxDeclared() const
-	{
-		return _maxState.rail || _maxState.server;
-	}
 	/* Max or min pins the geometry (server/WM owns it): the client geometry apply is skipped. */
+	/* Re-arm geometry apply after server drag-restore. */
+	void markGeometryDirty()
+	{
+		std::unique_lock lock(_gfxLock);
+		_geometryDirty = true;
+	}
+
 	[[nodiscard]] bool geometryFrozen() const
 	{
-		return maxDeclared() || _minState.rail || _minState.server;
+		return _maxState.rail || _maxState.server || _minState.rail || _minState.server;
+	}
+	/* A server restore has been applied but its rect has not arrived: geometry is unknown. */
+	[[nodiscard]] bool awaitingRestoreRect() const
+	{
+		std::unique_lock lock(_gfxLock);
+		return restoreRectPending();
 	}
 	/* Local or live-WM maximized (railMaximized may lag the SDL flag during a snap). */
 	[[nodiscard]] bool effectivelyMaximized() const;
@@ -205,26 +215,35 @@ class SdlRailWindow
 	/* One maximize/minimize state pair: local (sent to server), server-reported, pending apply. */
 	struct StateSync
 	{
-		/* Read lock-free by railMaximized()/geometryFrozen() on either thread, so they cannot be
-		 * plain bools. `dirty` stays one: every read and write of it is under _gfxLock. */
+		/* Atomic flags accessed lock-free by railMaximized()/geometryFrozen(). */
 		std::atomic<bool> rail{ false };
 		std::atomic<bool> server{ false };
 		bool dirty = false;
 	};
 	void setServerState(StateSync& s, bool m);
-	/* Caller holds _gfxLock and checked _win. */
-	void applyServerState(StateSync& s, const char* what, bool (*enter)(SDL_Window*));
+	/* Caller holds _gfxLock and checked _win. True when it left the state (restore branch). */
+	bool applyServerState(StateSync& s, const char* what, bool (*enter)(SDL_Window*));
+	/* Caller holds _gfxLock. */
+	[[nodiscard]] bool restoreRectPending() const;
 	[[nodiscard]] bool styleResizable() const; /* caller holds _gfxLock */
-	/* Window classes whose GFX surface carries meaningful per-pixel alpha. */
+	/* Popups whose GFX surface may carry per-pixel alpha (paintGfx). */
 	[[nodiscard]] bool honorsAlpha() const
 	{
-		return _isPopup || _layeredApp || _layered;
+		return _isPopup && !_layered;
 	}
+	/* Window role for logging. */
+	[[nodiscard]] const char* role() const
+	{
+		if (_overlay)
+			return _layered ? "overlay-layered" : "overlay";
+		return _layered ? "layered" : (_isPopup ? "popup" : "app");
+	}
+	[[nodiscard]] bool isFullDisplaySize() const; /* caller holds _gfxLock */
 	/* Band eligibility margins. */
 	[[nodiscard]] SDL_Rect bandMargins() const;
-	[[nodiscard]] SDL_Rect bandInsets() const;      /* insets(); caller holds _gfxLock */
+	[[nodiscard]] SDL_Rect bandInsets() const;      /* caller holds _gfxLock */
 	[[nodiscard]] SDL_Point blitOffset() const;     /* caller holds _gfxLock */
-	[[nodiscard]] SDL_Rect targetOuterRect() const; /* outerRect(); caller holds _gfxLock */
+	[[nodiscard]] SDL_Rect targetOuterRect() const; /* caller holds _gfxLock */
 	bool create(SDL_Window* parent, const SDL_Rect& parentRect);
 	bool paintGfx(SDL_PixelFormat format);
 	bool paintLegacy(SDL_Surface* primary, const std::vector<SDL_Rect>& damage);
@@ -233,6 +252,9 @@ class SdlRailWindow
 	std::unique_ptr<SdlWindow> _win; /* local window+renderer (lazy, main thread) */
 	SDL_Rect _windowRect;            /* server offset/size */
 	uint32_t _style = 0;
+	uint32_t _exStyle = 0;
+	/* The shadow-rule suppression report in reconcile is once per window. */
+	bool _shadowSuppressLogged = false;
 	bool _everResizable = false; /* latched: ever seen resizable (styleResizable) */
 	uint64_t _ownerId = 0;
 	SDL_Rect _resizeMargins = { 0, 0, 0, 0 }; /* x=left y=top w=right h=bottom */
@@ -246,9 +268,11 @@ class SdlRailWindow
 	bool _isPopup = false;
 	bool _fullscreen = false;      /* full-display popup as fullscreen toplevel (Wayland) */
 	bool _layered = false;         /* caption-less WS_EX_LAYERED decoration (drop shadow) */
-	bool _layeredApp = false;      /* captioned WS_EX_LAYERED app window: honor per-pixel alpha */
+	bool _clickThrough = false;    /* WS_EX_TRANSPARENT decoration */
+	bool _overlay = false;         /* layered tool window: drag image / drag feedback */
 	bool _popupClassified = false; /* isPopup/_layered frozen after the first (creation) style */
 	bool _shadowAnchored = false;  /* a visible popup adjoins this shadow (see setShadowAnchored) */
+	bool _frame = false;           /* companion shadow frame */
 	bool _parentApplied = false;   /* transient-for owner set once (owned non-popup dialogs) */
 	StateSync _maxState;           /* maximize sync */
 	StateSync _minState;           /* minimize sync */
@@ -283,6 +307,10 @@ class SdlRailWindow
 	bool _resizeAnchorBottom = false; /* anchor stale frame to the bottom edge (top-side resize) */
 	/* Timeout deadline for anchored frames during resize completion. */
 	uint64_t _awaitingFrameUntil = 0;
+	/* Deadline for the server's post-restore rect; 0 when none is awaited. */
+	uint64_t _awaitRestoreUntil = 0;
+	/* Content origin offset inside current GFX surface. */
+	SDL_Point _gfxVisOrigin = { 0, 0 };
 	SDL_Rect _extentsApplied = { 0, 0, 0, 0 }; /* band insets last mirrored to the WM */
 
 	/* Guard for state shared between RDP and main threads. */
@@ -294,6 +322,7 @@ class SdlRailWindow
 	bool _deleted = false;
 	std::vector<uint8_t> _gfxBuffer; /* owned deep-copy of the gdi surface (avoids UAF) */
 	uint32_t _gfxStride = 0;
+	uint32_t _surfaceId = 0;
 	uint32_t _gfxW = 0;
 	uint32_t _gfxH = 0;
 	bool _hasGfx = false;

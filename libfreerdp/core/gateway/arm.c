@@ -207,8 +207,6 @@ static wStream* arm_build_http_request(rdpArm* arm, const char* method,
 
 	if (!freerdp_settings_get_string(settings, FreeRDP_GatewayHttpExtAuthBearer))
 	{
-		char* token = nullptr;
-
 		pGetCommonAccessToken GetCommonAccessToken = freerdp_get_common_access_token(arm->context);
 		if (!GetCommonAccessToken)
 		{
@@ -219,18 +217,19 @@ static wStream* arm_build_http_request(rdpArm* arm, const char* method,
 		if (!arm_fetch_wellknown(arm))
 			goto out;
 
+		char* token = nullptr;
 		if (!GetCommonAccessToken(arm->context, ACCESS_TOKEN_TYPE_AVD, &token, 0))
 		{
+			winpr_zfree(token);
 			WLog_Print(arm->log, WLOG_ERROR, "Unable to obtain access token");
 			goto out;
 		}
 
-		if (!freerdp_settings_set_string(settings, FreeRDP_GatewayHttpExtAuthBearer, token))
-		{
-			free(token);
+		const BOOL rc =
+		    freerdp_settings_set_string(settings, FreeRDP_GatewayHttpExtAuthBearer, token);
+		winpr_zfree(token);
+		if (!rc)
 			goto out;
-		}
-		free(token);
 	}
 
 	if (!http_request_set_auth_scheme(request, "Bearer") ||
@@ -469,13 +468,14 @@ static BOOL arm_stringEncodeW(const BYTE* pin, size_t cbIn, BYTE** ppOut, size_t
 	*pcbOut = 0;
 
 	/* encode to base64 with crlf */
-	char* b64encoded = crypto_base64_encode_ex(pin, cbIn, TRUE);
+	size_t b64len = 0;
+	char* b64encoded = crypto_base64_encode_ex_len(pin, cbIn, TRUE, &b64len);
 	if (!b64encoded)
 		return FALSE;
 
 	/* and then convert to Unicode */
 	size_t outSz = 0;
-	*ppOut = (BYTE*)ConvertUtf8NToWCharAlloc(b64encoded, strlen(b64encoded), &outSz);
+	*ppOut = (BYTE*)ConvertUtf8NToWCharAlloc(b64encoded, b64len, &outSz);
 	free(b64encoded);
 
 	if (!*ppOut)
@@ -557,12 +557,21 @@ static BOOL arm_encodeRedirectPasswd(wLog* log, rdpSettings* settings, const rdp
 		}
 	}
 
-	settings->RdstlsSecurity = TRUE;
-	settings->AadSecurity = FALSE;
-	settings->NlaSecurity = FALSE;
-	settings->RdpSecurity = FALSE;
-	settings->TlsSecurity = FALSE;
-	settings->RedirectionFlags = LB_PASSWORD_IS_PK_ENCRYPTED;
+	if (!freerdp_settings_set_bool(settings, FreeRDP_RdstlsSecurity, TRUE))
+		goto out;
+	if (!freerdp_settings_set_bool(settings, FreeRDP_AadSecurity, FALSE))
+		goto out;
+	if (!freerdp_settings_set_bool(settings, FreeRDP_NlaSecurity, FALSE))
+		goto out;
+	if (!freerdp_settings_set_bool(settings, FreeRDP_ExtSecurity, FALSE))
+		goto out;
+	if (!freerdp_settings_set_bool(settings, FreeRDP_RdpSecurity, FALSE))
+		goto out;
+	if (!freerdp_settings_set_bool(settings, FreeRDP_TlsSecurity, FALSE))
+		goto out;
+	if (!freerdp_settings_set_uint32(settings, FreeRDP_RedirectionFlags,
+	                                 LB_PASSWORD_IS_PK_ENCRYPTED))
+		goto out;
 	ret = TRUE;
 out:
 	free(finalOutput);
@@ -867,17 +876,6 @@ out:
 	return ret;
 }
 
-static void zfree(char* str)
-{
-	if (str)
-	{
-		char* cur = str;
-		while (*cur != '\0')
-			*cur++ = '\0';
-	}
-	free(str);
-}
-
 static BOOL arm_fill_rdstls(rdpArm* arm, rdpSettings* settings, const WINPR_JSON* json,
                             const rdpCertificate* redirectedServerCert)
 {
@@ -931,9 +929,9 @@ static BOOL arm_fill_rdstls(rdpArm* arm, rdpSettings* settings, const WINPR_JSON
 			const BOOL rc1 = freerdp_settings_set_string(settings, FreeRDP_Username, username);
 			const BOOL rc2 = freerdp_settings_set_string(settings, FreeRDP_Password, password);
 			const BOOL rc3 = freerdp_settings_set_string(settings, FreeRDP_Domain, domain);
-			zfree(username);
-			zfree(password);
-			zfree(domain);
+			winpr_zfree(username);
+			winpr_zfree(password);
+			winpr_zfree(domain);
 			if (!rc || !rc1 || !rc2 || !rc3)
 				goto end;
 		}
@@ -1113,6 +1111,11 @@ static BOOL arm_handle_request_ok(rdpArm* arm, const HttpResponse* response)
 {
 	const size_t len = http_response_get_body_length(response);
 	const char* msg = http_response_get_body(response);
+	if ((len == 0) || !msg)
+	{
+		WLog_Print(arm->log, WLOG_ERROR, "Got HTTP Response data with empty body");
+		return FALSE;
+	}
 	const size_t alen = strnlen(msg, len + 1);
 	if (alen > len)
 	{

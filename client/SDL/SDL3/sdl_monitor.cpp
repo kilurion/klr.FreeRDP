@@ -134,10 +134,8 @@ int sdl_list_monitors([[maybe_unused]] SdlContext* sdl)
 
 		if (freerdp_settings_get_bool(settings, FreeRDP_RemoteApplicationMode))
 		{
-			/* RAIL maps server coordinates 1:1 to the local screen, so the session must cover
-			 * the full display. Sizing it to the usable bounds (/app implies /workarea) drops
-			 * the workarea origin: every window shifts by it and the server lays out windows
-			 * past its own screen bottom. Panels are reported via SPI_SET_WORK_AREA instead. */
+			/* RAIL requires full display coverage for 1:1 coordinates. Work area insets
+			 * are reported via SPI_SET_WORK_AREA instead of clipping session size. */
 			SDL_Rect rect = {};
 			if (SDL_GetDisplayBounds(monitor->orig_screen, &rect))
 			{

@@ -167,6 +167,8 @@ class SdlContext
 	[[nodiscard]] static BOOL postConnect(freerdp* instance);
 	static void postDisconnect(freerdp* instance);
 	static void postFinalDisconnect(freerdp* instance);
+	[[nodiscard]] static BOOL getAccessToken(freerdp* instance, AccessTokenType tokenType,
+	                                         char** token, size_t count, ...);
 	[[nodiscard]] static BOOL desktopResize(rdpContext* context);
 	[[nodiscard]] static BOOL playSound(rdpContext* context, const PLAY_SOUND_UPDATE* play_sound);
 	[[nodiscard]] static BOOL beginPaint(rdpContext* context);

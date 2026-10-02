@@ -38,3 +38,6 @@ bool sdl_x11_set_frame_extents(SDL_Window* window, int left, int right, int top,
 
 /* Set X11 bit gravity on window. */
 bool sdl_x11_set_bit_gravity(SDL_Window* window, int gravity);
+
+/* Send synthetic ButtonRelease if WM grab consumed physical release. */
+bool sdl_x11_send_left_button_release(SDL_Window* window);

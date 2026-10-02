@@ -20,10 +20,8 @@
 
 #include <cstdint>
 #include <map>
-#include <memory>
 #include <atomic>
 #include <mutex>
-#include <string>
 #include <vector>
 
 #include <SDL3/SDL.h>
@@ -132,6 +130,7 @@ class SdlRail
 	 * parent); else nullptr. Caller holds _windowsLock. */
 	[[nodiscard]] SdlRailWindow* resolveParent(uint64_t ownerId);
 	[[nodiscard]] SdlRailWindow* resolvePopupParent(const SdlRailWindow& popup);
+	[[nodiscard]] bool isShadowFrame(const SdlRailWindow& popup);
 
 	void enableRemoteAppMode(bool enable);
 	/* Report a work area to the server (SPI_SET_WORK_AREA, server coords). Main thread. No-op if it
@@ -139,8 +138,8 @@ class SdlRail
 	void sendWorkArea(const SDL_Rect& area);
 	/* Report a maximized window's WM-given geometry as the work area. Caller holds _windowsLock. */
 	void reportMaximizedWorkArea(SdlRailWindow* appWindow);
-		/* Report the usable bounds for the display currently hosting the RAIL window. */
-		void reportWindowDisplayWorkArea(SdlRailWindow* appWindow);
+	/* Report usable bounds in remote coordinates for the display hosting a RAIL window. */
+	void reportWindowDisplayWorkArea(SdlRailWindow* appWindow);
 	/* Clamp a window origin (x,y) so a w x h window stays inside the server desktop. */
 	void clampIntoDesktop(int& x, int& y, int w, int h) const;
 	/* Send a RAIL_SYSCOMMAND_ORDER for the window. Caller holds _windowsLock. */
@@ -221,8 +220,7 @@ class SdlRail
 		/* Server END order arrived while the drag was still pending (app closed its loop early):
 		 * the completion must not send the synthetic button-up. Guarded by _windowsLock. */
 		bool serverEnded = false;
-		/* Last WM-imposed size while a plain X11 move was active (noteDragResize; self-echoes of
-		 * our own reconcile filtered out). Consumed by the completion. */
+		/* Last WM-imposed size while plain X11 move was active (self-echoes filtered out). */
 		bool wmSized = false;
 		SDL_Point wmSize = { 0, 0 };
 	};

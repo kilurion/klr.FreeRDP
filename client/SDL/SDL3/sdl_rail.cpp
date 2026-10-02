@@ -19,8 +19,11 @@
 #include <algorithm>
 #include <limits>
 #include <tuple>
+#include <utility>
+#include <vector>
 
 #include <winpr/assert.h>
+#include <winpr/platform.h>
 #include <winpr/cast.h>
 
 #include <freerdp/freerdp.h>
@@ -61,6 +64,8 @@ SdlRailWindow* SdlRail::getWindow(uint64_t id)
 
 SdlRailWindow* SdlRail::getWindowBySdlId(SDL_WindowID id)
 {
+	if (id == 0)
+		return nullptr;
 	for (auto& it : _windows)
 	{
 		if (it.second.sdlId() == id)
@@ -69,10 +74,26 @@ SdlRailWindow* SdlRail::getWindowBySdlId(SDL_WindowID id)
 	return nullptr;
 }
 
+/* Test if popup adjoins window edge from outside. */
+static bool adjoinsOutside(const SDL_Rect& popup, const SDL_Rect& win)
+{
+	SDL_Rect hit{};
+	if (SDL_GetRectIntersection(&popup, &win, &hit))
+		return false;
+	const SDL_Rect grown = { win.x - 1, win.y - 1, win.w + 2, win.h + 2 };
+	return SDL_GetRectIntersection(&popup, &grown, &hit);
+}
+
+/* Fullscreen popups (e.g. slide shows) act as toplevels and can parent popups. */
+static bool canParentPopup(const SdlRailWindow& w)
+{
+	return (!w.isPopup() || w.isFullscreen()) && (w.window() != nullptr);
+}
+
 SdlRailWindow* SdlRail::resolveParent(uint64_t ownerId)
 {
 	auto* owner = getWindow(ownerId);
-	if (owner && !owner->isPopup() && owner->window())
+	if (owner && canParentPopup(*owner))
 		return owner;
 	return nullptr;
 }
@@ -82,20 +103,35 @@ SdlRailWindow* SdlRail::resolveParent(uint64_t ownerId)
 SdlRailWindow* SdlRail::resolvePopupParent(const SdlRailWindow& popup)
 {
 	SdlRailWindow* chosen = resolveParent(popup.owner());
-	if (!chosen && railPlatformCaps().positionsReadable)
+	if (!chosen)
 	{
 		const SDL_Rect pr = popup.windowRect();
 		const SDL_Point origin = { pr.x, pr.y };
-		for (auto& other : _windows)
+		for (uint32_t id : _zOrder)
 		{
-			auto& w = other.second;
-			if (w.isPopup() || !w.window())
+			auto* w = getWindow(id);
+			if (!w || !canParentPopup(*w))
 				continue;
-			const SDL_Rect wr = w.windowRect();
+			const SDL_Rect wr = w->windowRect();
 			if (SDL_PointInRect(&origin, &wr))
 			{
-				chosen = &w;
+				chosen = w;
 				break;
+			}
+		}
+		if (!chosen)
+		{
+			for (auto& other : _windows)
+			{
+				auto& w = other.second;
+				if (!canParentPopup(w))
+					continue;
+				const SDL_Rect wr = w.windowRect();
+				if (SDL_PointInRect(&origin, &wr))
+				{
+					chosen = &w;
+					break;
+				}
 			}
 		}
 	}
@@ -106,7 +142,7 @@ SdlRailWindow* SdlRail::resolvePopupParent(const SdlRailWindow& popup)
 		for (auto& other : _windows)
 		{
 			auto& w = other.second;
-			if (!w.isPopup() && w.window())
+			if (canParentPopup(w))
 			{
 				chosen = &w;
 				break;
@@ -114,6 +150,21 @@ SdlRailWindow* SdlRail::resolvePopupParent(const SdlRailWindow& popup)
 		}
 	}
 	return chosen;
+}
+
+/* Identify companion shadow frames adjoining owner window. */
+bool SdlRail::isShadowFrame(const SdlRailWindow& popup)
+{
+	if (!popup.isLayered())
+		return false;
+	const SDL_Rect pr = popup.windowRect();
+	for (auto& other : _windows)
+	{
+		auto& w = other.second;
+		if (canParentPopup(w) && adjoinsOutside(pr, w.windowRect()))
+			return true;
+	}
+	return false;
 }
 
 bool SdlRail::ownsWindow(SDL_WindowID id)
@@ -151,6 +202,9 @@ void SdlRail::sendWorkArea(const SDL_Rect& area)
 	if (SDL_RectsEqual(&area, &_sentWorkArea))
 		return;
 
+	RAIL_SYSPARAM_ORDER param = {};
+	/* ClientSystemParam dispatches on the params mask, not .param. */
+	param.params = SPI_MASK_SET_WORK_AREA;
 	const int maxCoord = std::numeric_limits<UINT16>::max();
 	const int left = std::clamp(area.x, 0, maxCoord);
 	const int top = std::clamp(area.y, 0, maxCoord);
@@ -158,10 +212,6 @@ void SdlRail::sendWorkArea(const SDL_Rect& area)
 	const int bottom = std::clamp(area.y + area.h, 0, maxCoord);
 	if ((right <= left) || (bottom <= top))
 		return;
-
-	RAIL_SYSPARAM_ORDER param = {};
-	/* ClientSystemParam dispatches on the params mask, not .param. */
-	param.params = SPI_MASK_SET_WORK_AREA;
 	param.workArea.left = static_cast<UINT16>(left);
 	param.workArea.top = static_cast<UINT16>(top);
 	param.workArea.right = static_cast<UINT16>(right);
@@ -257,12 +307,17 @@ void SdlRail::handleFocus(SDL_WindowID id, bool gained)
 	if (!appWindow || (appWindow->isPopup() && !appWindow->isFullscreen()) || !appWindow->window())
 		return;
 
+	/* Ignore focus loss while dragging: mapping restore shadow frames can steal focus
+	 * and cancel the server modal loop. */
+	if (!gained && (_localMove.id == static_cast<uint32_t>(appWindow->id())))
+		return;
+
 	/* Fallback parent for orphaned popups. */
 	if (gained)
 		_focusedAppId = appWindow->id();
 
 	/* ClientActivate only. Do NOT SDL_RaiseWindow to avoid WM focus loops. */
-	const uint32_t wid = static_cast<uint32_t>(appWindow->id());
+	const auto wid = static_cast<uint32_t>(appWindow->id());
 	sendClientActivate(wid, gained);
 }
 
@@ -286,7 +341,7 @@ void SdlRail::ensureActive(SDL_WindowID id)
 	auto* appWindow = getWindowBySdlId(id);
 	if (!appWindow || (appWindow->isPopup() && !appWindow->isFullscreen()) || !appWindow->window())
 		return;
-	const uint32_t wid = static_cast<uint32_t>(appWindow->id());
+	const auto wid = static_cast<uint32_t>(appWindow->id());
 	if (wid == _clientActiveId)
 		return;
 	sendClientActivate(wid, true);
@@ -337,14 +392,38 @@ bool SdlRail::paint(SDL_Surface* primary, SDL_PixelFormat fallbackFormat,
 
 	std::unique_lock lock(_windowsLock);
 
-	/* Erase RDP-thread-deleted entries here so SDL windows die on the main thread. */
-	for (auto it = _windows.begin(); it != _windows.end();)
+	/* Cascade deletion to child popups whose SDL parent was deleted. */
+	for (auto& [wid, win] : _windows)
 	{
-		if (it->second.isDeleted())
-			it = _windows.erase(it);
-		else
-			++it;
+		if (win.isDeleted() || !win.window())
+			continue;
+		for (SDL_Window* p = SDL_GetWindowParent(win.window()); p; p = SDL_GetWindowParent(p))
+		{
+			auto* owner = getWindowBySdlId(SDL_GetWindowID(p));
+			if (!owner || owner->isDeleted())
+			{
+				win.markDeleted();
+				break;
+			}
+		}
 	}
+
+	/* Erase deleted windows deepest child first to avoid SDL child double-free. */
+	std::vector<std::pair<size_t, uint64_t>> dead;
+	for (auto& [wid, win] : _windows)
+	{
+		if (!win.isDeleted())
+			continue;
+		size_t depth = 0;
+		for (SDL_Window* p = win.window() ? SDL_GetWindowParent(win.window()) : nullptr; p;
+		     p = SDL_GetWindowParent(p))
+			depth++;
+		dead.emplace_back(depth, wid);
+	}
+	std::sort(dead.begin(), dead.end(),
+	          [](const auto& a, const auto& b) { return a.first > b.first; });
+	for (const auto& [depth, wid] : dead)
+		_windows.erase(wid);
 	/* Windows displaced by a same-id recreate (addWindow) also die here, on the main thread. */
 	_deadWindows.clear();
 
@@ -364,8 +443,8 @@ bool SdlRail::paint(SDL_Surface* primary, SDL_PixelFormat fallbackFormat,
 			parentRect = owner->outerRect(); /* the SDL window's on-screen geometry */
 		}
 		win.paint(primary, fallbackFormat, damage, parent, parentRect);
-			if (_sentWorkArea.w == 0)
-				reportWindowDisplayWorkArea(&win);
+		if (_sentWorkArea.w == 0)
+			reportWindowDisplayWorkArea(&win);
 		/* Adopt WM-refused geometry and update server. */
 		SDL_Rect refusedOuter{};
 		if (win.takeWmOverride(refusedOuter))
@@ -410,6 +489,10 @@ bool SdlRail::paint(SDL_Surface* primary, SDL_PixelFormat fallbackFormat,
 		if (!popup.isPopup())
 			continue;
 
+		/* Latch shadow frame classification once identified. */
+		if (!popup.isFrame() && isShadowFrame(popup))
+			popup.setFrame(true);
+
 		/* Anchor drop shadow to adjoining visible popup. */
 		if (popup.isLayered())
 		{
@@ -427,11 +510,8 @@ bool SdlRail::paint(SDL_Surface* primary, SDL_PixelFormat fallbackFormat,
 				zone.y -= reach;
 				zone.w += 2 * reach;
 				zone.h += 2 * reach;
-				/* Containment, not intersection: a menu shadow hugs its popup and fits inside this
-				 * zone. An app-window frame-edge shadow is a full-height/width bar that only
-				 * crosses the popup's column/row; it extends far beyond the zone, so it is not a
-				 * shadow of this popup and must not be adopted (else it paints a bar overflowing
-				 * the menu). */
+				/* Shadow must be contained within reach zone to distinguish popup shadows from
+				 * app frame edge shadows. */
 				const bool inside = (sr.x >= zone.x) && (sr.y >= zone.y) &&
 				                    (sr.x + sr.w <= zone.x + zone.w) &&
 				                    (sr.y + sr.h <= zone.y + zone.h);
@@ -444,7 +524,20 @@ bool SdlRail::paint(SDL_Surface* primary, SDL_PixelFormat fallbackFormat,
 			popup.setShadowAnchored(anchored);
 		}
 
-		SdlRailWindow* chosen = resolvePopupParent(popup);
+		SdlRailWindow* chosen = nullptr;
+		/* Existing popups have an immutable SDL parent; position against it. */
+		if (auto* pw = popup.window())
+		{
+			SDL_Window* p = SDL_GetWindowParent(pw);
+			chosen = p ? getWindowBySdlId(SDL_GetWindowID(p)) : nullptr;
+		}
+		else
+		{
+			chosen = resolvePopupParent(popup);
+			if (!chosen)
+				WLog_DBG(TAG, "popup id=0x%08" PRIx32 " has no parent app window",
+				         static_cast<UINT32>(popup.id()));
+		}
 
 		SDL_Window* parent = nullptr;
 		SDL_Rect parentRect{};
@@ -453,9 +546,6 @@ bool SdlRail::paint(SDL_Surface* primary, SDL_PixelFormat fallbackFormat,
 			parent = chosen->window();
 			parentRect = chosen->outerRect(); /* the SDL window's on-screen geometry */
 		}
-		else
-			WLog_WARN(TAG, "popup id=0x%08" PRIx32 " has no parent app window",
-			          static_cast<UINT32>(popup.id()));
 		popup.paint(primary, fallbackFormat, damage, parent, parentRect);
 	}
 
@@ -481,28 +571,33 @@ void SdlRail::applyZOrder()
 		WLog_VRB(TAG, "zorder apply deferred: local move 0x%08" PRIx32 " active", _localMove.id);
 		return;
 	}
-	if (_zOrder == _appliedZOrder) /* drop identical server resends */
-	{
-		_zOrderDirty = false;
-		return;
-	}
-
 	/* Restack top-level windows (skip popups and hidden windows). */
 	std::vector<SDL_Window*> stack;
+	std::vector<uint32_t> applied;
 	stack.reserve(_zOrder.size());
+	applied.reserve(_zOrder.size());
 	for (uint32_t id : _zOrder)
 	{
 		auto* w = getWindow(id);
 		if (w && !w->isPopup() && w->window() &&
 		    ((SDL_GetWindowFlags(w->window()) & SDL_WINDOW_HIDDEN) == 0))
+		{
 			stack.push_back(w->window());
+			applied.push_back(id);
+		}
+	}
+	/* Dedup against the restacked set; menus and unrealized windows are filtered out. */
+	if (applied == _appliedZOrder)
+	{
+		_zOrderDirty = false;
+		return;
 	}
 	if (stack.size() >= 2)
 	{
 		std::ignore = sdl_x11_restack_windows(stack);
 	}
 
-	_appliedZOrder = _zOrder;
+	_appliedZOrder = std::move(applied);
 	_zOrderDirty = false;
 }
 
@@ -516,16 +611,23 @@ UINT SdlRail::updateWindowFromSurface(gdiGfxSurface* surface)
 	if (!appWindow)
 	{
 		/* Drop GFX surface for unknown windows (repaints later). */
-		WLog_VRB(TAG, "gfx surface for untracked id=0x%08" PRIx32, surface->windowId);
+		WLog_VRB(TAG, "gfx surface for untracked id=0x%08" PRIx64, surface->windowId);
 		return CHANNEL_RC_OK;
 	}
 
-	const uint32_t w = surface->mappedWidth ? surface->mappedWidth : surface->width;
-	const uint32_t h = surface->mappedHeight ? surface->mappedHeight : surface->height;
+	/* Clamp mapped dimensions to allocated surface bounds. */
+	const uint32_t w =
+	    std::min(surface->mappedWidth ? surface->mappedWidth : surface->width, surface->width);
+	const uint32_t h =
+	    std::min(surface->mappedHeight ? surface->mappedHeight : surface->height, surface->height);
 
 	/* Consume per-frame damage. */
 	UINT32 nbRects = 0;
 	const RECTANGLE_16* rects = region16_rects(&surface->invalidRegion, &nbRects);
+	/* Skip undamaged surfaces during EndFrame. */
+	const bool remapped = appWindow->takeSurfaceChange(surface->surfaceId);
+	if ((nbRects == 0) && !remapped)
+		return CHANNEL_RC_OK;
 	appWindow->updateGfxSurface(surface->data, surface->scanline, w, h, rects, nbRects,
 	                            surface->format);
 	region16_clear(&surface->invalidRegion);
@@ -583,17 +685,19 @@ bool SdlRail::init(RailClientContext* rail)
 	         sdl::utils::isWaylandDriver() ? "wayland"
 	                                       : (sdl::utils::isX11Driver() ? "x11" : "other"),
 	         caps.positionsReadable ? 1 : 0, caps.supportsTransparentWindows ? 1 : 0);
-	/* Lockstep the WM-driven X11 resize to our frames via _NET_WM_SYNC_REQUEST to prevent
-	 * half-resized/torn frames during drag (especially on Xwayland). */
-	#if defined(SDL_HINT_VIDEO_X11_ENABLE_XSYNC_EXT)
-	if (caps.positionsReadable)
+#if SDL_VERSION_ATLEAST(3, 4, 10)
+	/* Synchronize WM-driven X11 resizes via _NET_WM_SYNC_REQUEST to prevent torn frames. */
+	if (sdl::utils::isX11Driver())
 		SDL_SetHint(SDL_HINT_VIDEO_X11_ENABLE_XSYNC_EXT, "1");
-	#endif
+#endif
 	return true;
 }
 
-bool SdlRail::uninit(RailClientContext* /*rail*/)
+bool SdlRail::uninit(WINPR_ATTR_UNUSED RailClientContext* rail)
 {
+	WINPR_ASSERT(rail);
+	/* Leave rail->custom set: the server callbacks only assert it, so clearing it would crash a
+	 * late order in a release build. _enabled gates them instead. */
 	std::unique_lock lock(_windowsLock);
 	_refreshSent = false;
 	/* Reset session and move state on reconnect. */
@@ -613,6 +717,7 @@ bool SdlRail::uninit(RailClientContext* /*rail*/)
 	for (auto& kv : _windows)
 		kv.second.markDeleted();
 	_rail = nullptr;
+	_enabled = false;
 	lock.unlock();
 	(void)sdl_push_user_event(SDL_EVENT_USER_UPDATE);
 	return true;
@@ -670,7 +775,7 @@ UINT SdlRail::server_local_move_size(RailClientContext* context,
 		WLog_DBG(TAG, "server move/size start id=0x%08" PRIx32 " type=%" PRIu16 " pos=%d,%d",
 		         localMoveSize->windowId, localMoveSize->moveSizeType, localMoveSize->posX,
 		         localMoveSize->posY);
-		(void)sdl_push_user_event(SDL_EVENT_USER_RAIL_MOVE, localMoveSize->windowId, 0,
+		(void)sdl_push_user_event(SDL_EVENT_USER_RAIL_MOVE, localMoveSize->windowId,
 		                          static_cast<int>(localMoveSize->moveSizeType));
 	}
 	else if (!localMoveSize->isMoveSizeStart)
@@ -723,6 +828,16 @@ UINT SdlRail::server_local_move_size(RailClientContext* context,
 					         localMoveSize->windowId, actions.snapRect.x, actions.snapRect.y,
 					         actions.snapRect.w, actions.snapRect.h);
 					rail->sendClientWindowMove(appWindow, actions.snapRect);
+				}
+				/* WM resize can land after button-up (e.g. KDE tiling) while syncGeometry was
+				 * latched out. Sync post-loop geometry now; also needed for deferred snaps where
+				 * snapRect preceded the WM's final tile size. */
+				if (appWindow->window() && !appWindow->effectivelyMaximized() &&
+				    !appWindow->localMoveSizeChanged())
+				{
+					const SDL_WindowID sdlId = appWindow->sdlId();
+					lock.unlock();
+					rail->syncGeometry(sdlId);
 				}
 			}
 		}
@@ -878,7 +993,9 @@ void SdlRail::handleLocalMoveRequested(uint32_t windowId, uint16_t moveType)
 		}
 	}
 	else if (!started)
+	{
 		WLog_WARN(TAG, "WM move failed for RAIL window 0x%08" PRIx32, windowId);
+	}
 }
 
 /* Send ClientWindowMove with full frame geometry including server margins (caller holds
@@ -1011,9 +1128,7 @@ void SdlRail::reportWindowDisplayWorkArea(SdlRailWindow* appWindow)
 		bounds = usable;
 	const int relX = usable.x - bounds.x;
 	const int relY = usable.y - bounds.y;
-	/* RAIL work area is in remote desktop coordinates. With /span, those are the
-	 * monitor coordinates we advertised to the server, not necessarily SDL's
-	 * compositor-global bounds. */
+	/* RAIL work area uses remote desktop coordinates, which can differ from compositor coordinates. */
 	sendWorkArea({ monitor.x - minX + relX, monitor.y - minY + relY, usable.w, usable.h });
 }
 
@@ -1034,8 +1149,9 @@ void SdlRail::syncGeometry(SDL_WindowID id)
 		return;
 
 	const auto wid = static_cast<uint32_t>(w->id());
+	/* Skip geometry sync while awaiting server restored rect. */
 	if (w->localMoveActive() || (_localMove.id == wid) || w->loopEndPending() ||
-	    w->stateTransitionPending())
+	    w->stateTransitionPending() || w->awaitingRestoreRect())
 		return;
 
 	int lw = 0;
@@ -1066,7 +1182,7 @@ void SdlRail::syncGeometry(SDL_WindowID id)
 	if ((lw == vis.w) && (lh == vis.h) && (!posKnown || ((lx == vis.x) && (ly == vis.y))))
 	{
 		w->clearGeomApplyPending();
-		return; /* converged / self-echo - nothing to say */
+		return; /* Ignore self-echo when geometry converged. */
 	}
 
 	/* Drop transient echo events while client geometry application is in flight. */
@@ -1091,7 +1207,7 @@ void SdlRail::noteResizeGrab(SDL_WindowID id)
 	auto* appWindow = getWindowBySdlId(id);
 	/* Confirm compositor pointer grab on mouse leave during active drag resize. */
 	if (appWindow && (static_cast<uint32_t>(appWindow->id()) == _localMove.id) &&
-	    _localMove.wayland && !_localMove.sawResize)
+	    _localMove.wayland)
 		_localMove.sawResize = true;
 }
 
@@ -1145,14 +1261,12 @@ void SdlRail::completeWaylandResize(bool definitive)
 				appWindow->invalidateAll();
 				(void)sdl_push_user_event(SDL_EVENT_USER_UPDATE);
 			}
-			_localMove = {}; /* release the whole latch, not just the id */
+			_localMove = {}; /* Snapshot and clear drag state under lock. */
 		}
 		return;
 	}
 
-	/* Take the drag state as a unit and release the latch once: every field below is read after
-	 * the release, so clearing only `.id` here left the rest live and silently breaks for anyone
-	 * who later moves code across that line. */
+	/* Snapshot and clear drag state atomically under lock. */
 	const LocalMove drag = _localMove;
 	_localMove = {};
 
@@ -1183,13 +1297,18 @@ void SdlRail::completeLocalMoveIfPending()
 	if (_localMove.wayland)
 		return;
 
-	/* Take the drag state as a unit and release the latch once (see completeWaylandResize). */
+	/* Snapshot and clear drag state atomically under lock. */
 	const LocalMove drag = _localMove;
 	_localMove = {};
 
 	auto appWindow = getWindow(drag.id);
 	if (!appWindow || !appWindow->window() || appWindow->isDeleted())
 		return; /* window gone mid-drag: nothing to release into or report for */
+
+	/* Send synthetic button release if WM grab consumed physical release. */
+	if ((SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK) &&
+	    !(SDL_GetGlobalMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK))
+		(void)sdl_x11_send_left_button_release(appWindow->window());
 
 	/* Finalize WM resize before reading final size. */
 	(void)SDL_SyncWindow(appWindow->window());
@@ -1202,18 +1321,12 @@ void SdlRail::completeLocalMoveIfPending()
 	SDL_GetWindowPosition(appWindow->window(), &x, &y);
 	const bool isMove = (drag.type == RAIL_WMSZ_MOVE);
 	const SDL_Rect start = appWindow->outerRect(); /* position frozen at drag start */
-	/* A plain move never changes size: report the server-owned size. The local readback is stale
-	 * when the server drag-restored a maximized window mid-move (the WM keeps the grabbed frame at
-	 * the maximized size); reporting that back as normal geometry poisons the server's
-	 * maximize/restore state. */
+	/* Preserve server size during move; defer WM snap/tile size sync until loop END to avoid
+	 * server drag-restore conflict. */
 	if (isMove)
 	{
-		/* Exception: a WM-imposed size during a plain move is a local snap/tile (or un-tile). No
-		 * RDP command exists for it and the move loop only carries position, so adopt the WM size
-		 * (the live readback lies - mutter re-asserts tile geometry when its grab ends) and resend
-		 * the rect once the loop's END order confirms closure; sent earlier, the open loop
-		 * swallows it, and a snapped server window also drag-restores itself at release. */
-		if (!appWindow->effectivelyMaximized() && drag.wmSized)
+		if (!appWindow->effectivelyMaximized() && drag.wmSized &&
+		    !appWindow->localMoveSizeChanged())
 		{
 			/* Adopt WM size if window was resized during move. */
 			w = drag.wmSize.x;
@@ -1226,9 +1339,7 @@ void SdlRail::completeLocalMoveIfPending()
 			h = start.h;
 		}
 	}
-	/* Send synthetic button-up to finalize server modal move/size loop. */
-	/* Nothing to release into when the server closed its loop early: the button-up would be a
-	 * phantom click, and ClientWindowMove has already reported the geometry. */
+	/* Finalize modal loop unless server closed it early. */
 	if (!drag.serverEnded)
 	{
 		int px = drag.anchor.x;
@@ -1260,11 +1371,21 @@ void SdlRail::completeLocalMoveIfPending()
 
 		/* Adopt local geometry without sending ClientWindowMove during mouse drags. */
 		const SDL_Rect rect = appWindow->serverRect({ x, y, w, h });
+		const bool restoredMidDrag = appWindow->localMoveSizeChanged();
 		appWindow->adoptLocalGeometry(rect);
+		/* Drag complete: apply pending server resize delayed during WM grab. */
+		if (restoredMidDrag)
+			appWindow->markGeometryDirty();
 		(void)sdl_push_user_event(SDL_EVENT_USER_UPDATE);
 	}
+	else if (!isMove)
+	{
+		/* Sync final resize geometry if server closed loop early. */
+		clampIntoDesktop(x, y, w, h);
+		reportAndAdopt(appWindow, x, y, w, h);
+	}
 
-	(void)sdl_x11_set_bit_gravity(appWindow->window(), 0 /* forget: back to the default */);
+	(void)sdl_x11_set_bit_gravity(appWindow->window(), 0 /* reset to default */);
 }
 
 UINT SdlRail::server_min_max_info(RailClientContext* context,
@@ -1371,7 +1492,7 @@ void SdlRail::updateVisRects(SdlRailWindow* appWindow, const WINDOW_ORDER_INFO* 
 		WLog_DBG(TAG, "visrects id=0x%08" PRIx32 " n=0", orderInfo->windowId);
 	else
 		WLog_DBG(TAG, "visrects id=0x%08" PRIx32 " n=%zu first=%dx%d+%d+%d", orderInfo->windowId,
-		         rects.size(), rects[0].w, rects[0].h, rects[0].x, rects[0].y);
+		         rects.size(), rects.at(0).w, rects.at(0).h, rects.at(0).x, rects.at(0).y);
 	appWindow->setVisibilityRects(std::move(rects));
 }
 
@@ -1437,8 +1558,14 @@ BOOL SdlRail::window_common(rdpContext* context, const WINDOW_ORDER_INFO* orderI
 	if (fieldFlags & WINDOW_ORDER_FIELD_STYLE)
 		appWindow->setStyle(windowState->style, windowState->extendedStyle);
 	if (fieldFlags & WINDOW_ORDER_FIELD_TITLE)
-		appWindow->setTitle(reinterpret_cast<const char16_t*>(windowState->titleInfo.string),
-		                    windowState->titleInfo.length);
+	{
+		char* title = rail_string_to_utf8_string(&windowState->titleInfo);
+		if (title)
+		{
+			appWindow->setTitle(title);
+			free(title);
+		}
+	}
 
 	if (fieldFlags & WINDOW_ORDER_FIELD_SHOW)
 		updateShowState(appWindow, orderInfo, windowState);
@@ -1465,7 +1592,7 @@ SdlRailIcon* SdlRail::iconCacheLookup(uint32_t cacheId, uint32_t cacheEntry)
 	const size_t idx = static_cast<size_t>(cacheId) * _iconCacheEntries + cacheEntry;
 	if ((_iconCacheEntries == 0) || (cacheEntry >= _iconCacheEntries) || (idx >= _iconCache.size()))
 		return nullptr;
-	return &_iconCache[idx];
+	return &_iconCache.at(idx);
 }
 
 /* ICON_INFO (1/4/8/16/24/32 bpp + AND mask) -> BGRA32, like xf convert_rail_icon. */
@@ -1623,7 +1750,8 @@ BOOL SdlRail::monitored_desktop(rdpContext* context, const WINDOW_ORDER_INFO* or
 	return TRUE;
 }
 
-BOOL SdlRail::non_monitored_desktop(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo)
+BOOL SdlRail::non_monitored_desktop(rdpContext* context,
+                                    WINPR_ATTR_UNUSED const WINDOW_ORDER_INFO* orderInfo)
 {
 	WINPR_ASSERT(orderInfo);
 	auto rail = SdlRail::get(context);

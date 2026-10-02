@@ -1,14 +1,12 @@
 /**
  * FreeRDP: A Remote Desktop Protocol Implementation
- * Popup browser for AAD authentication
- *
- * Copyright 2023 Isaac Klein <fifthdegree@protonmail.com>
+ * X11 Windows
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *		 http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,18 +15,11 @@
  * limitations under the License.
  */
 
-#pragma once
-
-#include <freerdp/freerdp.h>
-
-#ifdef __cplusplus
-extern "C"
-{
-#endif
-
-	[[nodiscard]] BOOL sdl_webview_get_access_token(freerdp* instance, AccessTokenType tokenType,
-	                                                char** token, size_t count, ...);
-
-#ifdef __cplusplus
-}
+#ifndef FREERDP_CLIENT_X11_RECONNECT_H
+#define FREERDP_CLIENT_X11_RECONNECT_H
+#include "xfreerdp.h"
+WINPR_ATTR_NODISCARD SSIZE_T xf_retry_dialog(freerdp* instance, const char* what, size_t current,
+                                             void* userarg);
+WINPR_ATTR_NODISCARD BOOL xf_reconnect_event(xfContext* xfc, const XEvent* event);
+void xf_reconnect_close(xfContext* xfc);
 #endif

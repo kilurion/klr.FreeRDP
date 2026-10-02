@@ -996,13 +996,27 @@ static void xf_FixWindowCoordinates(xfContext* xfc, int* x, int* y, int* width, 
 
 	if (*x < xfc->vscreen.area.left)
 	{
-		*width += *x;
+		/* Only trim the window when a usable width is left. The original code
+		 * unconditionally did `*width += *x`, which turns the width negative
+		 * (and later clamps it to 1px) when the server reports an x far left of
+		 * the virtual desktop - which happens for RemoteApp dialogs when the
+		 * window manager places them. */
+		const int shift = xfc->vscreen.area.left - *x;
+
+		if (*width - shift >= 64)
+			*width -= shift;
+
 		*x = xfc->vscreen.area.left;
 	}
 
 	if (*y < xfc->vscreen.area.top)
 	{
-		*height += *y;
+		/* See above. */
+		const int shift = xfc->vscreen.area.top - *y;
+
+		if (*height - shift >= 64)
+			*height -= shift;
+
 		*y = xfc->vscreen.area.top;
 	}
 
@@ -1061,7 +1075,7 @@ BOOL xf_AppWindowCreate(xfContext* xfc, xfAppWindow* appWindow)
 	xf_FixWindowCoordinates(xfc, &appWindow->x, &appWindow->y, &appWindow->width,
 	                        &appWindow->height);
 	appWindow->shmid = -1;
-	appWindow->decorations = FALSE;
+	appWindow->decorations = xfc->decorations;
 	appWindow->fullscreen = FALSE;
 	appWindow->local_move.state = LMS_NOT_ACTIVE;
 	appWindow->is_mapped = FALSE;
@@ -1072,6 +1086,7 @@ BOOL xf_AppWindowCreate(xfContext* xfc, xfAppWindow* appWindow)
 	appWindow->minimized = FALSE;
 	appWindow->rail_ignore_configure = FALSE;
 	appWindow->rail_fullscreen_normalizing = FALSE;
+	appWindow->lastWndSizeUpdate = 0;
 
 	WINPR_ASSERT(xfc->depth != 0);
 	appWindow->handle = LogDynAndXCreateWindow(
@@ -1533,12 +1548,33 @@ UINT xf_AppUpdateWindowFromSurface(xfContext* xfc, gdiGfxSurface* surface)
 	if (!appWindow)
 	{
 		WLog_VRB(TAG, "Failed to find a window for id=0x%08" PRIx64, surface->windowId);
+		region16_clear(&surface->invalidRegion);
 		return CHANNEL_RC_OK;
 	}
 
-	const BOOL surfaceChanged = (appWindow->surfaceId != surface->surfaceId);
+	BOOL surfaceChanged = (appWindow->surfaceId != surface->surfaceId);
 	if (surfaceChanged)
 		appWindow->surfaceId = surface->surfaceId;
+
+	/* The server keeps sending updates for windows that are not visible on the
+	 * client, e.g. minimized ones or the hidden desktop window ("Program
+	 * Manager") that spans the whole virtual screen. Uploading those pixels into
+	 * an unmapped X window is wasted work (~100 MB per frame on a large
+	 * multi-monitor setup), so skip it and repaint the whole window once it is
+	 * mapped again, see xf_AppWindowRepaintFromSurface(). */
+	if (!appWindow->is_mapped)
+	{
+		appWindow->surfaceStale = TRUE;
+		region16_clear(&surface->invalidRegion);
+		xf_rail_return_window(appWindow, FALSE);
+		return CHANNEL_RC_OK;
+	}
+
+	if (appWindow->surfaceStale)
+	{
+		appWindow->surfaceStale = FALSE;
+		surfaceChanged = TRUE;
+	}
 
 	const BOOL maximized = (appWindow->dwStyle & WS_MAXIMIZE) != 0;
 	const UINT32 winW = WINPR_ASSERTING_INT_CAST(uint32_t, appWindow->width);
@@ -1637,10 +1673,35 @@ UINT xf_AppUpdateWindowFromSurface(xfContext* xfc, gdiGfxSurface* surface)
 
 	rc = CHANNEL_RC_OK;
 fail:
+	/* The invalid region has been painted, reset it like xf_OutputUpdate does for
+	 * output mapped surfaces. Otherwise the damage accumulates across frames until
+	 * the whole window is uploaded again on every single update. */
+	region16_clear(&surface->invalidRegion);
 	xf_rail_return_window(appWindow, FALSE);
 	LogDynAndXFlush(xfc->log, xfc->display);
 
 	return rc;
+}
+
+BOOL xf_AppWindowRepaintFromSurface(xfContext* xfc, UINT64 windowId, UINT32 surfaceId)
+{
+	WINPR_ASSERT(xfc);
+
+	if (surfaceId >= UINT16_MAX)
+		return TRUE;
+
+	rdpGdi* gdi = xfc->common.context.gdi;
+	if (!gdi || !gdi->gfx)
+		return TRUE;
+
+	RdpgfxClientContext* gfx = gdi->gfx;
+	UINT rc = CHANNEL_RC_OK;
+	EnterCriticalSection(&gfx->mux);
+	gdiGfxSurface* surface = gfx->GetSurfaceData(gfx, (UINT16)surfaceId);
+	if (surface && surface->windowMapped && (surface->windowId == windowId))
+		rc = xf_AppUpdateWindowFromSurface(xfc, surface);
+	LeaveCriticalSection(&gfx->mux);
+	return rc == CHANNEL_RC_OK;
 }
 
 BOOL xf_AppWindowResize(xfContext* xfc, xfAppWindow* appWindow)

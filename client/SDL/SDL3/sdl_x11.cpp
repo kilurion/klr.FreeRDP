@@ -19,6 +19,8 @@
 #include "sdl_x11.hpp"
 
 #include <utility>
+
+#include <winpr/platform.h>
 #include "sdl_utils.hpp"
 
 #include <cstdio>
@@ -35,7 +37,7 @@ bool sdl_x11_has_compositor()
 	/* Short-lived connection: caps are detected once, and no SDL window may exist yet. */
 	Display* dpy = XOpenDisplay(nullptr);
 	if (!dpy)
-		return true; /* can't tell - assume composited (matches historic default) */
+		return true; /* Default to composited if undetected. */
 	char sel[32];
 	(void)snprintf(sel, sizeof(sel), "_NET_WM_CM_S%d", DefaultScreen(dpy));
 	const Atom atom = XInternAtom(dpy, sel, False);
@@ -77,11 +79,13 @@ bool sdl_x11_begin_move_size(SDL_Window* window, int netDirection)
 	xev.window = xwin;
 	xev.message_type = s_moveResize;
 	xev.format = 32;
+	// NOLINTBEGIN(cppcoreguidelines-pro-type-union-access,google-runtime-int)
 	xev.data.l[0] = static_cast<long>(gx);
 	xev.data.l[1] = static_cast<long>(gy);
 	xev.data.l[2] = netDirection;
 	xev.data.l[3] = Button1;
 	xev.data.l[4] = 1; /* source: normal application */
+	// NOLINTEND(cppcoreguidelines-pro-type-union-access,google-runtime-int)
 
 	/* Release the implicit pointer grab of the pressed button, or the WM cannot take over. */
 	XUngrabPointer(dpy, CurrentTime);
@@ -102,7 +106,7 @@ bool sdl_x11_set_frame_extents(SDL_Window* window, int left, int right, int top,
 		s_extents = XInternAtom(dpy, "_GTK_FRAME_EXTENTS", False);
 
 	/* Set _GTK_FRAME_EXTENTS for invisible resize bands. */
-	const long data[4] = { left, right, top, bottom };
+	const long data[4] = { left, right, top, bottom }; // NOLINT(google-runtime-int)
 	XChangeProperty(dpy, xwin, s_extents, XA_CARDINAL, 32, PropModeReplace,
 	                reinterpret_cast<const unsigned char*>(data), 4);
 	XFlush(dpy);
@@ -119,6 +123,27 @@ bool sdl_x11_set_bit_gravity(SDL_Window* window, int gravity)
 	XSetWindowAttributes attrs{};
 	attrs.bit_gravity = gravity;
 	XChangeWindowAttributes(dpy, xwin, CWBitGravity, &attrs);
+	XFlush(dpy);
+	return true;
+}
+
+bool sdl_x11_send_left_button_release(SDL_Window* window)
+{
+	const auto [dpy, xwin] = sdl_x11_handles(window);
+	if (!dpy || (xwin == 0))
+		return false;
+
+	/* Empty mask: delivered to this client only, never to the WM. */
+	XButtonEvent ev = {};
+	ev.type = ButtonRelease;
+	ev.display = dpy;
+	ev.window = xwin;
+	ev.root = DefaultRootWindow(dpy);
+	ev.time = CurrentTime; /* SDL ignores X event time. */
+	ev.button = Button1;
+	ev.same_screen = True;
+	if (!XSendEvent(dpy, xwin, False, NoEventMask, reinterpret_cast<XEvent*>(&ev)))
+		return false;
 	XFlush(dpy);
 	return true;
 }
@@ -147,8 +172,8 @@ bool sdl_x11_restack_windows(const std::vector<SDL_Window*>& topToBottom)
 	/* Restack each window below its predecessor to realize the server z-order. */
 	for (size_t i = 1; i < topToBottom.size(); i++)
 	{
-		const Window win = sdl_x11_xwindow(topToBottom[i]);
-		const Window sibling = sdl_x11_xwindow(topToBottom[i - 1]);
+		const Window win = sdl_x11_xwindow(topToBottom.at(i));
+		const Window sibling = sdl_x11_xwindow(topToBottom.at(i - 1));
 		if ((win == 0) || (sibling == 0))
 			continue;
 
@@ -157,9 +182,11 @@ bool sdl_x11_restack_windows(const std::vector<SDL_Window*>& topToBottom)
 		xev.window = win;
 		xev.message_type = s_restack;
 		xev.format = 32;
+		// NOLINTBEGIN(cppcoreguidelines-pro-type-union-access,google-runtime-int)
 		xev.data.l[0] = 2; /* source indication: pager/direct (authoritative) */
 		xev.data.l[1] = static_cast<long>(sibling);
 		xev.data.l[2] = Below;
+		// NOLINTEND(cppcoreguidelines-pro-type-union-access,google-runtime-int)
 		XSendEvent(dpy, root, False, SubstructureRedirectMask | SubstructureNotifyMask,
 		           reinterpret_cast<XEvent*>(&xev));
 	}
@@ -174,23 +201,30 @@ bool sdl_x11_has_compositor()
 	return true;
 }
 
-bool sdl_x11_begin_move_size(SDL_Window* /*window*/, int /*netDirection*/)
+bool sdl_x11_begin_move_size(WINPR_ATTR_UNUSED SDL_Window* window,
+                             WINPR_ATTR_UNUSED int netDirection)
 {
 	return false;
 }
 
-bool sdl_x11_set_frame_extents(SDL_Window* /*window*/, int /*left*/, int /*right*/, int /*top*/,
-                               int /*bottom*/)
+bool sdl_x11_set_frame_extents(WINPR_ATTR_UNUSED SDL_Window* window, WINPR_ATTR_UNUSED int left,
+                               WINPR_ATTR_UNUSED int right, WINPR_ATTR_UNUSED int top,
+                               WINPR_ATTR_UNUSED int bottom)
 {
 	return false;
 }
 
-bool sdl_x11_set_bit_gravity(SDL_Window* /*window*/, int /*gravity*/)
+bool sdl_x11_set_bit_gravity(WINPR_ATTR_UNUSED SDL_Window* window, WINPR_ATTR_UNUSED int gravity)
 {
 	return false;
 }
 
-bool sdl_x11_restack_windows(const std::vector<SDL_Window*>& /*topToBottom*/)
+bool sdl_x11_restack_windows(WINPR_ATTR_UNUSED const std::vector<SDL_Window*>& topToBottom)
+{
+	return false;
+}
+
+bool sdl_x11_send_left_button_release(WINPR_ATTR_UNUSED SDL_Window* window)
 {
 	return false;
 }
