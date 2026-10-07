@@ -1,0 +1,24 @@
+Origin: klr-freerdp
+Label: KLR FreeRDP
+Suite: stable
+Codename: stable
+Architectures: amd64
+Components: main
+Description: Kilurion custom FreeRDP fork for Linux
+Date: Wed, 07 Oct 2026 07:29:17 +0000
+MD5Sum:
+ 8fb78ab201d0d745c9fd97a3554f269c              198 Release
+ a9d51c913c63ee364591e9388a00cb96             4424 main/binary-amd64/Packages
+ 395d94fd9783b71c854d207e6b268989             1922 main/binary-amd64/Packages.gz
+SHA1:
+ efe5570029fbd401fe669ab9fd4cc3ca5cb8f987              198 Release
+ 4d9fb70dd9b27d37313882dbbe7d091c39876863             4424 main/binary-amd64/Packages
+ 9499ba78e40e12169b7ba9a5afdf821893f62817             1922 main/binary-amd64/Packages.gz
+SHA256:
+ cf1895e542802cc576effe3ddcf4339ff8d9e1a6a0bc0f1ede00aae7db3d0eab              198 Release
+ 7567af0de2b56fc33916c862bef3338eb9356fcadd486030ee696c9ce69fc9df             4424 main/binary-amd64/Packages
+ 90a1e7ea29a53ce2ef9f1b4e9a328628df8b074d83757198658e6ca50187bd6a             1922 main/binary-amd64/Packages.gz
+SHA512:
+ ac1faab19c4446647f8c552e7eb9e500bb327fbed2a7597088c3eb6af91768d3ed5ae3c5b7d58e1e479aafe10ed84a3db655b8eb554a15c4c9bec748ab00e363              198 Release
+ f857e8a89417c390baf3b32d55c5b0458bb07339cb100041ae05c583451ba772fe9c80f46695c8475c874087eb7ce631467bb4f43643a1ed493d633f5c9a1615             4424 main/binary-amd64/Packages
+ 30e5f3e3b5a2f27cd4fc493e20675ae6a58f4ac7bb8b314ddc5809fd2050002050ec52405c4b25342a3c7712784deb22d0c756c839ce53e1e74042b91bd1cdbc             1922 main/binary-amd64/Packages.gz
